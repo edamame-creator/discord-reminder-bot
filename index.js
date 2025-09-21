@@ -18,8 +18,9 @@ const app = express();
 async function runReminderCheck() {
   console.log('リマインダーチェックを開始します...');
 
-  // 今日の日付をYYYY-MM-DD形式で取得
-  const today = new Date().toLocaleDateString('sv-SE');
+ // 日本時間（JST）で今日の日付をYYYY-MM-DD形式で取得
+const jstDateString = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Tokyo' });
+const today = jstDateString.split(' ')[0];
 
   // Firestoreから今日がリマインド日で、まだ未送信のリマインダーを探す
   const remindersRef = db.collection('reminders');
