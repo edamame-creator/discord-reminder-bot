@@ -2,6 +2,7 @@
 const express = require('express');
 const admin = require('firebase-admin');
 const axios = require('axios');
+const cors = require('cors'); 
 
 // STEP 2: Firebaseの初期設定
 // ReplitのSecretsに保存した情報を使ってFirebaseを初期化
