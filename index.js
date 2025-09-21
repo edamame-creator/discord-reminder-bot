@@ -13,6 +13,7 @@ const db = admin.firestore();
 
 // STEP 3: Expressサーバーの準備
 const app = express();
+app.use(cors()); 
 
 // STEP 4: メインの処理を行う関数
 async function runReminderCheck() {
