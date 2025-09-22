@@ -1,30 +1,22 @@
-// STEP 1: 必要なライブラリを読み込む
 const express = require('express');
 const admin = require('firebase-admin');
 const axios = require('axios');
-const cors = require('cors'); 
+const cors = require('cors');
 
-// STEP 2: Firebaseの初期設定
-// ReplitのSecretsに保存した情報を使ってFirebaseを初期化
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)
 });
 const db = admin.firestore();
 
-// STEP 3: Expressサーバーの準備
 const app = express();
-app.use(cors()); 
+app.use(cors());
 
-// STEP 4: メインの処理を行う関数
 async function runReminderCheck() {
   console.log('リマインダーチェックを開始します...');
+  const jstDateString = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Tokyo' });
+  const today = jstDateString.split(' ')[0];
 
- // 日本時間（JST）で今日の日付をYYYY-MM-DD形式で取得
-const jstDateString = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Tokyo' });
-const today = jstDateString.split(' ')[0];
-
-  // Firestoreから今日がリマインド日で、まだ未送信のリマインダーを探す
   const remindersRef = db.collection('reminders');
   const snapshot = await remindersRef.where('reminderDate', '==', today).where('isSent', '==', false).get();
 
@@ -33,30 +25,24 @@ const today = jstDateString.split(' ')[0];
     return '本日実行するリマインダーはありませんでした。';
   }
 
-  // 見つかった各リマインダーに対して処理を実行
   for (const doc of snapshot.docs) {
     const reminder = doc.data();
     console.log(`リマインダー「${reminder.submissionDeadline}」の処理を開始します。`);
 
-    // 未提出者を探す
     const nonSubmitters = await findNonSubmitters(reminder);
 
-    // 未提出者がいればDiscordに通知
     if (nonSubmitters.length > 0) {
       await sendDiscordNotification(nonSubmitters, reminder);
       console.log('未提出者に通知を送信しました。');
     } else {
       console.log('全員提出済みです。');
     }
-
-    // 送信済みフラグを更新
     await doc.ref.update({ isSent: true });
   }
-
   return 'リマインダー処理が完了しました。';
 }
 
-// 未提出者を探すヘルパー関数
+// ▼▼▼ 修正済みの関数 ▼▼▼
 async function findNonSubmitters(reminder) {
   const membersRef = db.collection('members');
   const membersSnapshot = await membersRef.get();
@@ -64,14 +50,13 @@ async function findNonSubmitters(reminder) {
   
   const nonSubmitters = [];
 
-  // 全メンバーをループして提出状況をチェック
   for (const member of allMembers) {
     let hasSubmitted = false;
-    // チェックすべき期間の日付をループ
     const startDate = new Date(reminder.scheduleStartDate);
     const endDate = new Date(reminder.scheduleEndDate);
 
-    for (let d = startDate; d <= endDate; d.setDate(d.getDate() + 1)) {
+    // forループで日付オブジェクトが変更されないようにコピーを作成してループ
+    for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
       const dateString = d.toLocaleDateString('sv-SE');
       const scheduleDocRef = db.collection('schedules').doc(dateString);
       const scheduleDoc = await scheduleDocRef.get();
@@ -81,32 +66,42 @@ async function findNonSubmitters(reminder) {
         const hasAvailability = data.availability?.[member.id]?.length > 0;
         const isUnavailable = data.unavailable?.[member.id] === true;
         
-        // どちらかの入力があれば提出済みとみなす
         if (hasAvailability || isUnavailable) {
           hasSubmitted = true;
-          break; // このメンバーのチェックは完了
+          break;
         }
       }
     }
     
     if (!hasSubmitted) {
-      nonSubmitters.push(member.name); // 未提出者リストに名前を追加
+      // メンション用にDiscord IDも含むオブジェクトを返す
+      nonSubmitters.push({ name: member.name, discordId: member.discordId });
     }
   }
   return nonSubmitters;
 }
+// ▲▲▲ ここまで修正済みの関数 ▲▲▲
 
-// Discordに通知を送るヘルパー関数
 async function sendDiscordNotification(nonSubmitters, reminder) {
+  // sendDiscordNotification関数は以前の修正版を流用
   const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
+  const mentions = nonSubmitters.map(user => user.discordId ? `<@${user.discordId}>` : user.name).join(' ');
+
   const message = {
-    content: `【稼働表リマインダー🔔】\n**${reminder.submissionDeadline}** 提出期限の稼働表が未提出の方がいます！\n\n**未提出者:**\n- ${nonSubmitters.join('\n- ')}\n\n提出のご協力をお願いします。`
+    content: mentions,
+    embeds: [{
+      title: "【稼働表提出リマインダー🔔】",
+      description: `**${reminder.submissionDeadline}** が提出期限です！\n**${reminder.scheduleEndDate}** までの稼働表が未提出のため、ご協力をお願いします。`,
+      color: 15158332,
+      fields: [{
+          name: "未提出者",
+          value: nonSubmitters.map(user => `- ${user.name}`).join('\n'),
+      }]
+    }]
   };
   await axios.post(webhookUrl, message);
 }
 
-
-// STEP 5: 外部から呼び出されるための窓口（エンドポイント）を作成
 app.get('/run-reminder', async (req, res) => {
   try {
     const result = await runReminderCheck();
@@ -117,7 +112,7 @@ app.get('/run-reminder', async (req, res) => {
   }
 });
 
-// Discordの認証コードをFirebaseのカスタムトークンに交換するためのエンドポイント
+// ▼▼▼ 修正済みのエンドポイント ▼▼▼
 app.post('/exchange-discord-code', express.json(), async (req, res) => {
   const { code } = req.body;
   if (!code) {
@@ -125,7 +120,6 @@ app.post('/exchange-discord-code', express.json(), async (req, res) => {
   }
 
   try {
-    // 1. Discordに認証コードを送り、アクセストークンを取得
     const tokenResponse = await axios.post('https://discord.com/api/oauth2/token', new URLSearchParams({
       client_id: process.env.DISCORD_CLIENT_ID,
       client_secret: process.env.DISCORD_CLIENT_SECRET,
@@ -137,8 +131,6 @@ app.post('/exchange-discord-code', express.json(), async (req, res) => {
     });
 
     const accessToken = tokenResponse.data.access_token;
-
-    // 2. アクセストークンを使い、Discordユーザーの情報を取得
     const userResponse = await axios.get('https://discord.com/api/users/@me', {
       headers: { 'Authorization': `Bearer ${accessToken}` },
     });
@@ -147,22 +139,18 @@ app.post('/exchange-discord-code', express.json(), async (req, res) => {
     const discordId = discordUser.id;
     const discordUsername = discordUser.username;
 
-    // 3. 取得したDiscord IDを元に、Firebaseのカスタムトークンを生成
     const customToken = await admin.auth().createCustomToken(discordId);
     
-// 返す情報にdiscordIdとdiscordUsernameを追加
+    // 応答を一度だけ送るように修正
     res.json({ customToken, discordId, discordUsername });
-
-    // 4. フロントエンドにカスタムトークンとDiscord IDを返す
-    res.json({ customToken, discordId });
 
   } catch (error) {
     console.error('Discord認証の処理中にエラー:', error.response?.data || error.message);
     res.status(500).send('認証に失敗しました。');
   }
 });
+// ▲▲▲ ここまで修正済みのエンドポイント ▲▲▲
 
-// STEP 6: サーバーを起動
 app.listen(3000, () => {
   console.log('リマインダーBOTサーバーがポート3000で起動しました。');
 });
