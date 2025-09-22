@@ -112,44 +112,7 @@ app.get('/run-reminder', async (req, res) => {
   }
 });
 
-// ▼▼▼ 修正済みのエンドポイント ▼▼▼
-app.post('/exchange-discord-code', express.json(), async (req, res) => {
-  const { code } = req.body;
-  if (!code) {
-    return res.status(400).send('Discordの認証コードがありません。');
-  }
 
-  try {
-    const tokenResponse = await axios.post('https://discord.com/api/oauth2/token', new URLSearchParams({
-      client_id: process.env.DISCORD_CLIENT_ID,
-      client_secret: process.env.DISCORD_CLIENT_SECRET,
-      grant_type: 'authorization_code',
-      code: code,
-      redirect_uri: 'https://todolist-e03b2.web.app/discord-callback.html',
-    }), {
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    });
-
-    const accessToken = tokenResponse.data.access_token;
-    const userResponse = await axios.get('https://discord.com/api/users/@me', {
-      headers: { 'Authorization': `Bearer ${accessToken}` },
-    });
-
-    const discordUser = userResponse.data;
-    const discordId = discordUser.id;
-    const discordUsername = discordUser.username;
-
-    const customToken = await admin.auth().createCustomToken(discordId);
-    
-    // 応答を一度だけ送るように修正
-    res.json({ customToken, discordId, discordUsername });
-
-  } catch (error) {
-    console.error('Discord認証の処理中にエラー:', error.response?.data || error.message);
-    res.status(500).send('認証に失敗しました。');
-  }
-});
-// ▲▲▲ ここまで修正済みのエンドポイント ▲▲▲
 
 app.listen(3000, () => {
   console.log('リマインダーBOTサーバーがポート3000で起動しました。');
