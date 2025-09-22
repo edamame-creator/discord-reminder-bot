@@ -1,27 +1,24 @@
-const axios = require('axios');
-const admin = require('firebase-admin');
-
-// Firebase Admin SDKを初期化
-const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
-});
-const db = admin.firestore();
-
-// Discordの認証情報を環境変数から取得
-const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID; // Renderの環境変数に設定
-const DISCORD_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET; // Renderの環境変数に設定
-const RENDER_APP_URL = `https://discord-reminder-bot-ixuj.onrender.com`; // ご自身のURLに変更
+// --- ライブラリの読み込み ---
 const express = require('express');
-const admin = require('firebase-admin');
-const axios = require('axios');
 const cors = require('cors');
+const axios = require('axios');
+const admin = require('firebase-admin');
 
+// --- Firebase Admin SDKの初期化 ---
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)
 });
 const db = admin.firestore();
+
+// --- Discord認証情報の環境変数からの取得 ---
+const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID;
+const DISCORD_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET;
+const RENDER_APP_URL = `https://discord-reminder-bot-ixuj.onrender.com`;
+
+// --- Expressアプリの初期化 ---
+const app = express();
+app.use(cors());
 
 const app = express();
 app.use(cors());
@@ -192,7 +189,7 @@ app.get('/api/discord/callback', async (req, res) => {
   } catch (error) {
     console.error('Discord OAuth Error:', error.response ? error.response.data : error.message);
     // 失敗時はエラーページなどにリダイレクト
-    res.redirect(`https://<あなたのFirebaseプロジェクトID>.web.app/profile?discord=error`);
+    res.redirect(`https://todolist-e03b2.web.app/profile?discord=error`);
   }
 });
 
