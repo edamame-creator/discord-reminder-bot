@@ -42,7 +42,7 @@ async function runReminderCheck() {
   return 'リマインダー処理が完了しました。';
 }
 
-// ▼▼▼ 修正済みの関数 ▼▼▼
+
 async function findNonSubmitters(reminder) {
   const membersRef = db.collection('members');
   const membersSnapshot = await membersRef.get();
@@ -80,7 +80,7 @@ async function findNonSubmitters(reminder) {
   }
   return nonSubmitters;
 }
-// ▲▲▲ ここまで修正済みの関数 ▲▲▲
+
 
 async function sendDiscordNotification(nonSubmitters, reminder) {
   // sendDiscordNotification関数は以前の修正版を流用
