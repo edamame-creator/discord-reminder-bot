@@ -183,7 +183,7 @@ app.get('/api/discord/callback', async (req, res) => {
     });
 
     // 4. 連携完了後、フロントエンドのプロフィールページなどにリダイレクト
-    res.redirect(`https://todolist-e03b2.web.app/profile?discord=success`); // 成功時のリダイレクト先URL
+    res.redirect(`https://todolist-e03b2.web.app/profile.html?discord=success`); // 成功時のリダイレクト先URL
 
   } catch (error) {
     console.error('Discord OAuth Error:', error.response ? error.response.data : error.message);
