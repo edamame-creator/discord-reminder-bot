@@ -20,8 +20,6 @@ const RENDER_APP_URL = `https://discord-reminder-bot-ixuj.onrender.com`;
 const app = express();
 app.use(cors());
 
-app.use(cors());
-
 async function runReminderCheck() {
   console.log('リマインダーチェックを開始します...');
   const jstDateString = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Tokyo' });
@@ -173,14 +171,12 @@ app.get('/api/discord/callback', async (req, res) => {
     
     const discordUser = userResponse.data;
 
-    // 3. Firestoreのユーザー情報を更新
+    // 3. Firestoreにユーザー情報を保存 (存在しない場合も考慮してset with mergeを使用)
     const userRef = db.collection('users').doc(firebaseUid);
-    await userRef.update({
-      discordId: discordUser.id,
-      discordUsername: `${discordUser.username}#${discordUser.discriminator}`,
-      // 必要であれば他の情報も保存
-      // discordAvatar: `https://cdn.discordapp.com/avatars/${discordUser.id}/${discordUser.avatar}.png`
-    });
+    await userRef.set({
+        discordId: discordUser.id,
+        discordUsername: `${discordUser.username}#${discordUser.discriminator}`
+    }, { merge: true });
 
     // 4. 連携完了後、フロントエンドのプロフィールページなどにリダイレクト
    res.redirect(`https://todolist-e03b2.web.app/signup.html?discord=success`); // 成功時のリダイレクト先URL
@@ -188,7 +184,7 @@ app.get('/api/discord/callback', async (req, res) => {
   } catch (error) {
     console.error('Discord OAuth Error:', error.response ? error.response.data : error.message);
     // 失敗時はエラーページなどにリダイレクト
-    res.redirect(`https://todolist-e03b2.web.app/profile?discord=error`);
+    res.redirect(`https://todolist-e03b2.web.app/signup.html?discord=error`);
   }
 });
 
