@@ -93,20 +93,25 @@ async function findNonSubmitters(reminder) {
 async function sendDiscordNotification(nonSubmitters, reminder) {
   // sendDiscordNotification関数は以前の修正版を流用
   const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
-  const mentions = nonSubmitters.map(user => user.discordId ? `<@${user.discordId}>` : user.name).join(' ');
+  // 未提出者リストを処理し、メンション（IDがあれば）または名前の文字列を作成
+    const mentionsList = nonSubmitters.map(user => 
+        user.discordId ? `<@${user.discordId}>` : user.name
+    );
 
-  const message = {
-    content: mentions,
-    embeds: [{
-      title: "【稼働表提出リマインダー🔔】",
-      description: `**${reminder.submissionDeadline}** が提出期限です！\n**${reminder.scheduleEndDate}** までの稼働表が未提出のため、ご協力をお願いします。`,
-      color: 15158332,
-      fields: [{
-          name: "未提出者",
-          value: nonSubmitters.map(user => `- ${user.name}`).join('\n'),
-      }]
-    }]
-  };
+    const message = {
+        // contentには、スペースで区切ったメンション文字列を設定
+        content: mentionsList.join(' '),
+        embeds: [{
+            title: "【稼働表提出リマインダー🔔】",
+            description: `**${reminder.submissionDeadline}** が提出期限です！\n**${reminder.scheduleEndDate}** までの稼働表が未提出のため、ご協力をお願いします。`,
+            color: 15158332,
+            fields: [{
+                name: "未提出者",
+                // valueには、改行で区切ったリストを設定
+                value: mentionsList.map(item => `- ${item}`).join('\n'),
+            }]
+        }]
+    };
   await axios.post(webhookUrl, message);
 }
 
