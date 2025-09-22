@@ -20,7 +20,6 @@ const RENDER_APP_URL = `https://discord-reminder-bot-ixuj.onrender.com`;
 const app = express();
 app.use(cors());
 
-const app = express();
 app.use(cors());
 
 async function runReminderCheck() {
