@@ -20,6 +20,9 @@ const RENDER_APP_URL = `https://discord-reminder-bot-ixuj.onrender.com`;
 const app = express();
 app.use(cors());
 
+// POSTリクエストのbodyをJSONとして解析するための設定
+app.use(express.json());
+
 async function runReminderCheck() {
   console.log('リマインダーチェックを開始します...');
   const jstDateString = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Tokyo' });
@@ -47,7 +50,91 @@ async function runReminderCheck() {
     }
     await doc.ref.update({ isSent: true });
   }
+  // --- 新しいリアクション確認処理を呼び出す ---
+    console.log('リアクションチェックを開始します...');
+    await runReactionCheck();
   return 'リマインダー処理が完了しました。';
+}
+
+/**
+ * リアクションをチェックして未反応者にリマインドを送信する関数
+ */
+async function runReactionCheck() {
+    const today = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Tokyo' }).split(' ')[0];
+    const checksRef = db.collection('reaction_checks');
+    const snapshot = await checksRef.where('reminderDate', '==', today).where('isReminderSent', '==', false).get();
+
+    if (snapshot.empty) {
+        console.log('本日チェックするリアクションはありません。');
+        return;
+    }
+
+    const botToken = process.env.DISCORD_BOT_TOKEN;
+
+    for (const doc of snapshot.docs) {
+        const check = doc.data();
+        const { messageId, channelId, targetUsers } = check;
+        const guildId = process.env.DISCORD_GUILD_ID; // サーバー(ギルド)IDも環境変数に設定
+
+        try {
+            // :white_check_mark: の絵文字をURLエンコードしたもの
+            const emoji = encodeURIComponent('✅');
+            
+            // リアクションしたユーザーのリストを取得
+            const response = await axios.get(`https://discord.com/api/v10/channels/${channelId}/messages/${messageId}/reactions/${emoji}`, {
+                headers: { 'Authorization': `Bot ${botToken}` },
+                params: { limit: 100 } // リアクションしたユーザーの上限
+            });
+            
+            const reactedUserIds = response.data.map(user => user.id);
+
+            // 未反応のユーザーを特定
+            const nonReactors = targetUsers.filter(targetId => !reactedUserIds.includes(targetId));
+
+            if (nonReactors.length > 0) {
+                const reminderMentions = nonReactors.map(userId => `<@${userId}>`).join(' ');
+                const originalMessageLink = `https://discord.com/channels/${guildId}/${channelId}/${messageId}`;
+                const reminderMessage = {
+                    content: `${reminderMentions}\n\n**【確認リマインダー】**\n下記のメッセージをまだ確認していません。内容を確認の上、リアクションをお願いします。\n${originalMessageLink}`
+                };
+
+                // 未反応者にリマインドを送信
+                await axios.post(`https://discord.com/api/v10/channels/${channelId}/messages`, reminderMessage, {
+                    headers: {
+                        'Authorization': `Bot ${botToken}`,
+                        'Content-Type': 'application/json'
+                    }
+                });
+                console.log(`未反応者 (${nonReactors.join(', ')}) にリマインドを送信しました。`);
+            } else {
+                console.log(`メッセージID: ${messageId} は全員反応済みです。`);
+            }
+
+            // リマインダー送信済みフラグを立てる
+            await doc.ref.update({ isSent: true });
+
+        } catch (error) {
+            // 404エラーはリアクションがまだ誰もしていない場合に発生するため、正常なケースとして扱う
+            if (error.response && error.response.status === 404) {
+                 const reminderMentions = targetUsers.map(userId => `<@${userId}>`).join(' ');
+                 const originalMessageLink = `https://discord.com/channels/${guildId}/${channelId}/${messageId}`;
+                 const reminderMessage = {
+                    content: `${reminderMentions}\n\n**【確認リマインダー】**\n下記のメッセージをまだ確認していません。内容を確認の上、リアクションをお願いします。\n${originalMessageLink}`
+                };
+                 await axios.post(`https://discord.com/api/v10/channels/${channelId}/messages`, reminderMessage, {
+                    headers: {
+                        'Authorization': `Bot ${botToken}`,
+                        'Content-Type': 'application/json'
+                    }
+                });
+                console.log(`誰もリアクションしていなかったため、全員にリマインドを送信しました。`);
+                await doc.ref.update({ isSent: true });
+
+            } else {
+               console.error(`メッセージID ${messageId} のチェック中にエラーが発生しました:`, error.response ? error.response.data : error.message);
+            }
+        }
+    }
 }
 
 
@@ -123,6 +210,48 @@ app.get('/run-reminder', async (req, res) => {
     console.error('リマインダー処理中にエラーが発生しました:', error);
     res.status(500).send('エラーが発生しました。');
   }
+});
+
+// --- 既読確認メッセージ投稿用のエンドポイント ---
+app.post('/post-reaction-check', async (req, res) => {
+    try {
+        const { content, targetUsers, reminderDate, channelId } = req.body;
+        
+        // Renderの環境変数からボットトークンとチャンネルIDを取得
+        const botToken = process.env.DISCORD_BOT_TOKEN;
+        // channelIdはリクエストから受け取るか、環境変数で固定にするか選べます
+        const targetChannelId = channelId || process.env.DISCORD_CHANNEL_ID; 
+        
+        const mentions = targetUsers.map(userId => `<@${userId}>`).join(' ');
+        const messageToSend = {
+            content: `${mentions}\n\n**【重要なお知らせ】**\n${content}\n\n---\n内容を確認したら、このメッセージに :white_check_mark: のリアクションをお願いします。`
+        };
+
+        // Discord APIを直接叩いてメッセージを投稿し、レスポンスからメッセージIDを取得
+        const response = await axios.post(`https://discord.com/api/v10/channels/${targetChannelId}/messages`, messageToSend, {
+            headers: {
+                'Authorization': `Bot ${botToken}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        const messageId = response.data.id;
+
+        // Firestoreに管理用のデータを保存
+        await db.collection('reaction_checks').add({
+            messageId: messageId,
+            channelId: targetChannelId,
+            targetUsers: targetUsers, // Discord IDの配列
+            reminderDate: reminderDate,
+            isReminderSent: false,
+            createdAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        res.status(200).send({ success: true, message: 'メッセージを投稿しました。' });
+    } catch (error) {
+        console.error('メッセージ投稿エラー:', error.response ? error.response.data : error.message);
+        res.status(500).send({ success: false, message: 'エラーが発生しました。' });
+    }
 });
 
 // --- ステップ 2-3-A: 認証開始用のエンドポイント ---
