@@ -1,3 +1,17 @@
+const axios = require('axios');
+const admin = require('firebase-admin');
+
+// Firebase Admin SDKを初期化
+const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount)
+});
+const db = admin.firestore();
+
+// Discordの認証情報を環境変数から取得
+const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID; // Renderの環境変数に設定
+const DISCORD_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET; // Renderの環境変数に設定
+const RENDER_APP_URL = `https://discord-reminder-bot-ixuj.onrender.com`; // ご自身のURLに変更
 const express = require('express');
 const admin = require('firebase-admin');
 const axios = require('axios');
@@ -112,6 +126,75 @@ app.get('/run-reminder', async (req, res) => {
   }
 });
 
+// --- ステップ 2-3-A: 認証開始用のエンドポイント ---
+app.get('/auth/discord', (req, res) => {
+  const { uid } = req.query; // フロントエンドからFirebaseのUIDを受け取る
+
+  if (!uid) {
+    return res.status(400).send('Firebase UID is required.');
+  }
+
+  const redirectUri = `${RENDER_APP_URL}/api/discord/callback`;
+  const discordAuthUrl = `https://discord.com/api/oauth2/authorize?client_id=${DISCORD_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=identify&state=${uid}`;
+  
+  res.redirect(discordAuthUrl);
+});
+
+
+// --- ステップ 2-3-B: 認証後のコールバック処理用エンドポイント ---
+app.get('/api/discord/callback', async (req, res) => {
+  const { code, state } = req.query;
+  const firebaseUid = state; // stateに格納しておいたFirebaseのUIDを取得
+
+  if (!code) {
+    return res.status(400).send('Discord code is required.');
+  }
+
+  try {
+    const redirectUri = `${RENDER_APP_URL}/api/discord/callback`;
+    
+    // 1. 認可コードを使ってアクセストークンを取得
+    const tokenResponse = await axios.post('https://discord.com/api/oauth2/token', new URLSearchParams({
+      client_id: DISCORD_CLIENT_ID,
+      client_secret: DISCORD_CLIENT_SECRET,
+      grant_type: 'authorization_code',
+      code: code,
+      redirect_uri: redirectUri,
+    }), {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+    });
+
+    const accessToken = tokenResponse.data.access_token;
+
+    // 2. アクセストークンを使ってDiscordユーザー情報を取得
+    const userResponse = await axios.get('https://discord.com/api/users/@me', {
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+      },
+    });
+    
+    const discordUser = userResponse.data;
+
+    // 3. Firestoreのユーザー情報を更新
+    const userRef = db.collection('users').doc(firebaseUid);
+    await userRef.update({
+      discordId: discordUser.id,
+      discordUsername: `${discordUser.username}#${discordUser.discriminator}`,
+      // 必要であれば他の情報も保存
+      // discordAvatar: `https://cdn.discordapp.com/avatars/${discordUser.id}/${discordUser.avatar}.png`
+    });
+
+    // 4. 連携完了後、フロントエンドのプロフィールページなどにリダイレクト
+    res.redirect(`https://<あなたのFirebaseプロジェクトID>.web.app/profile?discord=success`); // 成功時のリダイレクト先URL
+
+  } catch (error) {
+    console.error('Discord OAuth Error:', error.response ? error.response.data : error.message);
+    // 失敗時はエラーページなどにリダイレクト
+    res.redirect(`https://<あなたのFirebaseプロジェクトID>.web.app/profile?discord=error`);
+  }
+});
 
 
 app.listen(3000, () => {
