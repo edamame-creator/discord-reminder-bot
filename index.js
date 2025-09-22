@@ -1,17 +1,21 @@
+// STEP 1: 必要なライブラリを読み込む
 const express = require('express');
 const admin = require('firebase-admin');
 const axios = require('axios');
 const cors = require('cors');
 
+// STEP 2: Firebaseの初期設定
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)
 });
 const db = admin.firestore();
 
+// STEP 3: Expressサーバーの準備
 const app = express();
 app.use(cors());
 
+// --- リマインダー機能 ---
 async function runReminderCheck() {
   console.log('リマインダーチェックを開始します...');
   const jstDateString = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Tokyo' });
@@ -28,9 +32,7 @@ async function runReminderCheck() {
   for (const doc of snapshot.docs) {
     const reminder = doc.data();
     console.log(`リマインダー「${reminder.submissionDeadline}」の処理を開始します。`);
-
     const nonSubmitters = await findNonSubmitters(reminder);
-
     if (nonSubmitters.length > 0) {
       await sendDiscordNotification(nonSubmitters, reminder);
       console.log('未提出者に通知を送信しました。');
@@ -42,51 +44,41 @@ async function runReminderCheck() {
   return 'リマインダー処理が完了しました。';
 }
 
-// ▼▼▼ 修正済みの関数 ▼▼▼
 async function findNonSubmitters(reminder) {
   const membersRef = db.collection('members');
   const membersSnapshot = await membersRef.get();
   const allMembers = membersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
   
   const nonSubmitters = [];
-
   for (const member of allMembers) {
     let hasSubmitted = false;
     const startDate = new Date(reminder.scheduleStartDate);
     const endDate = new Date(reminder.scheduleEndDate);
 
-    // forループで日付オブジェクトが変更されないようにコピーを作成してループ
     for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
       const dateString = d.toLocaleDateString('sv-SE');
       const scheduleDocRef = db.collection('schedules').doc(dateString);
       const scheduleDoc = await scheduleDocRef.get();
-
       if (scheduleDoc.exists) {
         const data = scheduleDoc.data();
         const hasAvailability = data.availability?.[member.id]?.length > 0;
         const isUnavailable = data.unavailable?.[member.id] === true;
-        
         if (hasAvailability || isUnavailable) {
           hasSubmitted = true;
           break;
         }
       }
     }
-    
     if (!hasSubmitted) {
-      // メンション用にDiscord IDも含むオブジェクトを返す
       nonSubmitters.push({ name: member.name, discordId: member.discordId });
     }
   }
   return nonSubmitters;
 }
-// ▲▲▲ ここまで修正済みの関数 ▲▲▲
 
 async function sendDiscordNotification(nonSubmitters, reminder) {
-  // sendDiscordNotification関数は以前の修正版を流用
   const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
   const mentions = nonSubmitters.map(user => user.discordId ? `<@${user.discordId}>` : user.name).join(' ');
-
   const message = {
     content: mentions,
     embeds: [{
@@ -94,8 +86,8 @@ async function sendDiscordNotification(nonSubmitters, reminder) {
       description: `**${reminder.submissionDeadline}** が提出期限です！\n**${reminder.scheduleEndDate}** までの稼働表が未提出のため、ご協力をお願いします。`,
       color: 15158332,
       fields: [{
-          name: "未提出者",
-          value: nonSubmitters.map(user => `- ${user.name}`).join('\n'),
+        name: "未提出者",
+        value: nonSubmitters.map(user => `- ${user.name}`).join('\n'),
       }]
     }]
   };
@@ -112,8 +104,46 @@ app.get('/run-reminder', async (req, res) => {
   }
 });
 
+// ▼▼▼ この部分が抜けていました ▼▼▼
+// --- Discordログイン連携機能 ---
+app.post('/exchange-discord-code', express.json(), async (req, res) => {
+  const { code } = req.body;
+  if (!code) {
+    return res.status(400).send('Discordの認証コードがありません。');
+  }
 
+  try {
+    const tokenResponse = await axios.post('https://discord.com/api/oauth2/token', new URLSearchParams({
+      client_id: process.env.DISCORD_CLIENT_ID,
+      client_secret: process.env.DISCORD_CLIENT_SECRET,
+      grant_type: 'authorization_code',
+      code: code,
+      redirect_uri: 'https://todolist-e03b2.web.app/discord-callback.html',
+    }), {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    });
 
+    const accessToken = tokenResponse.data.access_token;
+    const userResponse = await axios.get('https://discord.com/api/users/@me', {
+      headers: { 'Authorization': `Bearer ${accessToken}` },
+    });
+
+    const discordUser = userResponse.data;
+    const discordId = discordUser.id;
+    const discordUsername = discordUser.username;
+
+    const customToken = await admin.auth().createCustomToken(discordId);
+    
+    res.json({ customToken, discordId, discordUsername });
+
+  } catch (error) {
+    console.error('Discord認証の処理中にエラー:', error.response?.data || error.message);
+    res.status(500).send('認証に失敗しました。');
+  }
+});
+// ▲▲▲ ここまで ▲▲▲
+
+// STEP 6: サーバーを起動
 app.listen(3000, () => {
   console.log('リマインダーBOTサーバーがポート3000で起動しました。');
 });
