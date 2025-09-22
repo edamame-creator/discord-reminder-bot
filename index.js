@@ -145,9 +145,13 @@ app.post('/exchange-discord-code', express.json(), async (req, res) => {
 
     const discordUser = userResponse.data;
     const discordId = discordUser.id;
+    const discordUsername = discordUser.username;
 
     // 3. 取得したDiscord IDを元に、Firebaseのカスタムトークンを生成
     const customToken = await admin.auth().createCustomToken(discordId);
+    
+// 返す情報にdiscordIdとdiscordUsernameを追加
+    res.json({ customToken, discordId, discordUsername });
 
     // 4. フロントエンドにカスタムトークンとDiscord IDを返す
     res.json({ customToken, discordId });
