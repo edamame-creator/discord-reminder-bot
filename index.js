@@ -56,83 +56,64 @@ async function runReminderCheck() {
   return 'リマインダー処理が完了しました。';
 }
 
-/**
- * リアクションをチェックして未反応者にリマインドを送信する関数
- */
+// 特定のドキュメントIDを対象にリアクションチェックとリマインドを行う関数
+async function checkAndRemind(doc) {
+    const check = doc.data();
+    const { messageId, channelId, targetUsers, guildId } = check;
+    const botToken = process.env.DISCORD_BOT_TOKEN;
+
+    if (!guildId) {
+        console.error(`ドキュメント ${doc.id} にguildIdがありません。`);
+        return;
+    }
+    
+    try {
+        const emoji = encodeURIComponent('✅');
+        const response = await axios.get(`https://discord.com/api/v10/channels/${channelId}/messages/${messageId}/reactions/${emoji}`, {
+            headers: { 'Authorization': `Bot ${botToken}` },
+            params: { limit: 100 }
+        });
+        const reactedUserIds = response.data.map(user => user.id);
+        const nonReactors = targetUsers.filter(targetId => !reactedUserIds.includes(targetId));
+
+        if (nonReactors.length > 0) {
+            const reminderMentions = nonReactors.map(userId => `<@${userId}>`).join(' ');
+            const originalMessageLink = `https://discord.com/channels/${guildId}/${channelId}/${messageId}`;
+            const reminderMessage = {
+                content: `${reminderMentions}\n\n**【確認リマインダー】**\n下記のメッセージをまだ確認していません。内容を確認の上、リアクションをお願いします。\n${originalMessageLink}`
+            };
+            await axios.post(`https://discord.com/api/v10/channels/${channelId}/messages`, reminderMessage, {
+                headers: { 'Authorization': `Bot ${botToken}`, 'Content-Type': 'application/json' }
+            });
+            console.log(`[リマインド送信] 未反応者 (${nonReactors.join(', ')}) に送信しました。`);
+        } else {
+            console.log(`[リマインド不要] メッセージID: ${messageId} は全員反応済みです。`);
+        }
+    } catch (error) {
+        if (error.response && error.response.status === 404) {
+            console.log(`[リマインド送信] メッセージID: ${messageId} に誰もリアクションしていなかったため、全員に送信します。`);
+            // エラー処理内にもリマインド送信ロジックを追加（全員が未反応の場合）
+            const reminderMentions = targetUsers.map(userId => `<@${userId}>`).join(' ');
+            const originalMessageLink = `https://discord.com/channels/${guildId}/${channelId}/${messageId}`;
+            const reminderMessage = { content: `${reminderMentions}\n\n**【確認リマインダー】**\n${originalMessageLink}` };
+            await axios.post(`https://discord.com/api/v10/channels/${channelId}/messages`, reminderMessage, { headers: { 'Authorization': `Bot ${botToken}`, 'Content-Type': 'application/json' } });
+        } else {
+            console.error(`[エラー] ID ${messageId} のチェック中にエラー:`, error.message);
+        }
+    }
+}
+
+// 毎日実行される関数は、上記の関数を呼び出すだけにする
 async function runReactionCheck() {
     const today = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Tokyo' }).split(' ')[0];
-    const checksRef = db.collection('reaction_checks');
-    const snapshot = await checksRef.where('reminderDate', '==', today).where('isReminderSent', '==', false).get();
-
+    const snapshot = await db.collection('reaction_checks').where('reminderDate', '==', today).where('isReminderSent', '==', false).get();
     if (snapshot.empty) {
         console.log('本日チェックするリアクションはありません。');
         return;
     }
-
-    const botToken = process.env.DISCORD_BOT_TOKEN;
-
     for (const doc of snapshot.docs) {
-        const check = doc.data();
-        const { messageId, channelId, targetUsers, guildId } = check; // guildIdも取得        
-
-        try {
-            // :white_check_mark: の絵文字をURLエンコードしたもの
-            const emoji = encodeURIComponent('✅');
-            
-            // リアクションしたユーザーのリストを取得
-            const response = await axios.get(`https://discord.com/api/v10/channels/${channelId}/messages/${messageId}/reactions/${emoji}`, {
-                headers: { 'Authorization': `Bot ${botToken}` },
-                params: { limit: 100 } // リアクションしたユーザーの上限
-            });
-            
-            const reactedUserIds = response.data.map(user => user.id);
-
-            // 未反応のユーザーを特定
-            const nonReactors = targetUsers.filter(targetId => !reactedUserIds.includes(targetId));
-
-            if (nonReactors.length > 0) {
-                const reminderMentions = nonReactors.map(userId => `<@${userId}>`).join(' ');
-                const originalMessageLink = `https://discord.com/channels/${guildId}/${channelId}/${messageId}`;
-                const reminderMessage = {
-                    content: `${reminderMentions}\n\n**【確認リマインダー】**\n下記のメッセージをまだ確認していません。内容を確認の上、リアクションをお願いします。\n${originalMessageLink}`
-                };
-
-                // 未反応者にリマインドを送信
-                await axios.post(`https://discord.com/api/v10/channels/${channelId}/messages`, reminderMessage, {
-                    headers: {
-                        'Authorization': `Bot ${botToken}`,
-                        'Content-Type': 'application/json'
-                    }
-                });
-                console.log(`未反応者 (${nonReactors.join(', ')}) にリマインドを送信しました。`);
-            } else {
-                console.log(`メッセージID: ${messageId} は全員反応済みです。`);
-            }
-
-            // リマインダー送信済みフラグを立てる
-            await doc.ref.update({ isSent: true });
-
-        } catch (error) {
-            // 404エラーはリアクションがまだ誰もしていない場合に発生するため、正常なケースとして扱う
-            if (error.response && error.response.status === 404) {
-                 const reminderMentions = targetUsers.map(userId => `<@${userId}>`).join(' ');
-                 const originalMessageLink = `https://discord.com/channels/${guildId}/${channelId}/${messageId}`;
-                 const reminderMessage = {
-                    content: `${reminderMentions}\n\n**【確認リマインダー】**\n下記のメッセージをまだ確認していません。内容を確認の上、リアクションをお願いします。\n${originalMessageLink}`
-                };
-                 await axios.post(`https://discord.com/api/v10/channels/${channelId}/messages`, reminderMessage, {
-                    headers: {
-                        'Authorization': `Bot ${botToken}`,
-                        'Content-Type': 'application/json'
-                    }
-                });
-                console.log(`誰もリアクションしていなかったため、全員にリマインドを送信しました。`);
-                await doc.ref.update({ isSent: true });
-
-            } else {
-               console.error(`メッセージID ${messageId} のチェック中にエラーが発生しました:`, error.response ? error.response.data : error.message);
-            }
-        }
+        await checkAndRemind(doc); // ★リファクタリングした関数を呼び出し
+        await doc.ref.update({ isSent: true }); // 送信済みフラグを立てる
     }
 }
 
@@ -520,6 +501,25 @@ app.get('/api/common-guilds', async (req, res) => {
     } catch (error) {
         console.error('共通サーバーの取得エラー:', error);
         res.status(500).json({ message: '共通サーバーの取得に失敗しました。' });
+    }
+});
+
+app.post('/api/remind-now', async (req, res) => {
+    try {
+        const { postId } = req.body;
+        if (!postId) return res.status(400).json({ message: 'postIdが必要です。'});
+
+        const docRef = db.collection('reaction_checks').doc(postId);
+        const doc = await docRef.get();
+
+        if (!doc.exists) return res.status(404).json({ message: '対象の投稿が見つかりません。'});
+        
+        await checkAndRemind(doc); // ★同じ関数を呼び出す
+        
+        res.status(200).json({ success: true, message: 'リマインドを送信しました。' });
+    } catch (error) {
+        console.error('「今すぐリマインド」エラー:', error);
+        res.status(500).json({ message: 'リマインドの送信に失敗しました。'});
     }
 });
 
