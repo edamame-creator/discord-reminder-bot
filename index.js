@@ -73,8 +73,7 @@ async function runReactionCheck() {
 
     for (const doc of snapshot.docs) {
         const check = doc.data();
-        const { messageId, channelId, targetUsers } = check;
-        const guildId = process.env.DISCORD_GUILD_ID; // サーバー(ギルド)IDも環境変数に設定
+        const { messageId, channelId, targetUsers, guildId } = check; // guildIdも取得        
 
         try {
             // :white_check_mark: の絵文字をURLエンコードしたもの
@@ -231,7 +230,7 @@ app.get('/run-reminder', async (req, res) => {
 // --- 既読確認メッセージ投稿用のエンドポイント ---
 app.post('/post-reaction-check', async (req, res) => {
     try {
-        const { content, targetUsers, reminderDate, channelId } = req.body;
+        const { content, targetUsers, reminderDate, channelId, guildId } = req.body;
         
         // Renderの環境変数からボットトークンとチャンネルIDを取得
         const botToken = process.env.DISCORD_BOT_TOKEN;
@@ -260,6 +259,7 @@ app.post('/post-reaction-check', async (req, res) => {
          　 content: content,
             targetUsers: targetUsers, // Discord IDの配列
             reminderDate: reminderDate,
+          　guildId: guildId, // フロントエンドから受け取ったguildIdを保存
             isReminderSent: false,
             createdAt: admin.firestore.FieldValue.serverTimestamp()
         });
@@ -342,7 +342,9 @@ app.get('/api/discord/callback', async (req, res) => {
 // --- Discordサーバーのメンバー一覧を取得するエンドポイント ---
 app.get('/api/discord/members', async (req, res) => {
     try {
-        const guildId = process.env.DISCORD_GUILD_ID;
+        const { guildId } = req.query; // リクエストからguildIdを取得
+        if (!guildId) return res.status(400).json({ message: 'サーバーIDが必要です。' });
+
         const botToken = process.env.DISCORD_BOT_TOKEN;
 
         const response = await axios.get(`https://discord.com/api/v10/guilds/${guildId}/members`, {
@@ -367,7 +369,10 @@ app.get('/api/discord/members', async (req, res) => {
 // --- Discordサーバーのチャンネル一覧を取得するエンドポイント ---
 app.get('/api/discord/channels', async (req, res) => {
     try {
-        const guildId = process.env.DISCORD_GUILD_ID;
+        const { guildId } = req.query; // リクエストからguildIdを取得
+        if (!guildId) {
+            return res.status(400).json({ message: 'サーバーIDが必要です。' });
+        }
         const botToken = process.env.DISCORD_BOT_TOKEN;
 
         const response = await axios.get(`https://discord.com/api/v10/guilds/${guildId}/channels`, {
@@ -448,6 +453,52 @@ app.delete('/api/delete-message', async (req, res) => {
     } catch (error) {
         console.error('メッセージ削除エラー:', error);
         res.status(500).json({ message: 'メッセージの削除に失敗しました。' });
+    }
+});
+
+// --- ユーザーとBotの共通サーバー一覧を取得するエンドポイント ---
+app.get('/api/common-guilds', async (req, res) => {
+    try {
+        const { uid } = req.query;
+        if (!uid) return res.status(400).json({ message: 'UIDが必要です。' });
+
+        const botToken = process.env.DISCORD_BOT_TOKEN;
+
+        // 1. Firebase UIDからユーザーのDiscord IDを取得
+        const userDoc = await db.collection('users').doc(uid).get();
+        if (!userDoc.exists || !userDoc.data().discordId) {
+            return res.status(404).json({ message: 'ユーザーに紐づくDiscord IDが見つかりません。' });
+        }
+        const userDiscordId = userDoc.data().discordId;
+
+        // 2. Botが参加しているサーバー一覧を取得
+        const botGuildsResponse = await axios.get('https://discord.com/api/v10/users/@me/guilds', {
+            headers: { 'Authorization': `Bot ${botToken}` }
+        });
+        const botGuilds = botGuildsResponse.data;
+
+        // 3. ユーザーが各サーバーに参加しているか並行してチェック
+        const checkPromises = botGuilds.map(async (guild) => {
+            try {
+                // ユーザーがサーバーのメンバーであるかを確認
+                await axios.get(`https://discord.com/api/v10/guilds/${guild.id}/members/${userDiscordId}`, {
+                    headers: { 'Authorization': `Bot ${botToken}` }
+                });
+                return guild; // メンバーであれば、サーバー情報を返す
+            } catch (error) {
+                // メンバーでない場合(404エラー)、nullを返す
+                return null;
+            }
+        });
+        
+        // 4. チェックが完了したサーバーのうち、nullでないものだけをリスト化
+        const commonGuilds = (await Promise.all(checkPromises)).filter(Boolean);
+        
+        res.json(commonGuilds);
+
+    } catch (error) {
+        console.error('共通サーバーの取得エラー:', error);
+        res.status(500).json({ message: '共通サーバーの取得に失敗しました。' });
     }
 });
 
