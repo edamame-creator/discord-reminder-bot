@@ -61,6 +61,7 @@ async function checkAndRemind(doc) {
     const check = doc.data();
     const { messageId, channelId, targetUsers, guildId } = check;
     const botToken = process.env.DISCORD_BOT_TOKEN;
+  　
 
     if (!guildId) {
         console.error(`ドキュメント ${doc.id} にguildIdがありません。`);
@@ -160,6 +161,7 @@ async function findNonSubmitters(reminder) {
 async function sendDiscordNotification(nonSubmitters, reminder) {
     // 環境変数からBotトークンと投稿先チャンネルIDを取得
     const botToken = process.env.DISCORD_BOT_TOKEN;
+  
     // 環境変数からではなく、リマインダー情報からチャンネルIDを取得
     const channelId = reminder.channelId; 
 
@@ -215,10 +217,15 @@ app.post('/post-reaction-check', async (req, res) => {
         
         // Renderの環境変数からボットトークンとチャンネルIDを取得
         const botToken = process.env.DISCORD_BOT_TOKEN;
-        // channelIdはリクエストから受け取るか、環境変数で固定にするか選べます
-        const targetChannelId = channelId || process.env.DISCORD_CHANNEL_ID; 
-        
-        const mentions = targetUsers.map(userId => `<@${userId}>`).join(' ');
+        const isEveryone = targetUsers.includes('everyone');
+        let mentions = '';
+
+        if (isEveryone) {
+            mentions = '@everyone';
+        } else {
+            mentions = targetUsers.map(userId => `<@${userId}>`).join(' ');
+        }
+      
         const messageToSend = {
             content: `${mentions}\n\n**【重要なお知らせ】**\n${content}\n\n---\n内容を確認したら、このメッセージに :white_check_mark: のリアクションをお願いします。`
         };
