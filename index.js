@@ -398,7 +398,15 @@ app.get('/api/discord/channels', async (req, res) => {
 
 app.get('/api/reaction-checks', async (req, res) => {
     try {
-        const snapshot = await db.collection('reaction_checks').orderBy('createdAt', 'desc').get();
+        const { guildId } = req.query;
+        if (!guildId) {
+            return res.status(400).json({ message: 'サーバーIDが必要です。' });
+        }
+
+        const snapshot = await db.collection('reaction_checks')
+                                 .where('guildId', '==', guildId) // guildIdで絞り込み
+                                 .orderBy('createdAt', 'desc')
+                                 .get();
         const posts = snapshot.docs.map(doc => ({
             id: doc.id, // FirestoreのドキュメントID
             ...doc.data()
