@@ -178,15 +178,20 @@ async function findNonSubmitters(reminder) {
 
 
 async function sendDiscordNotification(nonSubmitters, reminder) {
-  // sendDiscordNotification関数は以前の修正版を流用
-  const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
-  // 未提出者リストを処理し、メンション（IDがあれば）または名前の文字列を作成
+    // 環境変数からBotトークンと投稿先チャンネルIDを取得
+    const botToken = process.env.DISCORD_BOT_TOKEN;
+    const channelId = process.env.DISCORD_CHANNEL_ID;
+
+    if (!botToken || !channelId) {
+        console.error('ボットトークンまたはチャンネルIDが設定されていません。');
+        return;
+    }
+
     const mentionsList = nonSubmitters.map(user => 
         user.discordId ? `<@${user.discordId}>` : user.name
     );
 
     const message = {
-        // contentには、スペースで区切ったメンション文字列を設定
         content: mentionsList.join(' '),
         embeds: [{
             title: "【稼働表提出リマインダー🔔】",
@@ -194,12 +199,22 @@ async function sendDiscordNotification(nonSubmitters, reminder) {
             color: 15158332,
             fields: [{
                 name: "未提出者",
-                // valueには、改行で区切ったリストを設定
                 value: mentionsList.map(item => `- ${item}`).join('\n'),
             }]
         }]
     };
-  await axios.post(webhookUrl, message);
+    
+    try {
+        // DiscordのAPIを直接叩いてメッセージを送信
+        await axios.post(`https://discord.com/api/v10/channels/${channelId}/messages`, message, {
+            headers: {
+                'Authorization': `Bot ${botToken}`,
+                'Content-Type': 'application/json'
+            }
+        });
+    } catch (error) {
+        console.error('Discordへの通知送信中にエラーが発生しました:', error.response ? error.response.data : error.message);
+    }
 }
 
 app.get('/run-reminder', async (req, res) => {
@@ -241,7 +256,7 @@ app.post('/post-reaction-check', async (req, res) => {
         await db.collection('reaction_checks').add({
             messageId: messageId,
             channelId: targetChannelId,
-          content: content,
+         　 content: content,
             targetUsers: targetUsers, // Discord IDの配列
             reminderDate: reminderDate,
             isReminderSent: false,
@@ -372,6 +387,66 @@ app.get('/api/discord/channels', async (req, res) => {
     } catch (error) {
         console.error('Discordチャンネルの取得エラー:', error);
         res.status(500).json({ message: 'チャンネルの取得に失敗しました。' });
+    }
+});
+
+app.get('/api/reaction-checks', async (req, res) => {
+    try {
+        const snapshot = await db.collection('reaction_checks').orderBy('createdAt', 'desc').get();
+        const posts = snapshot.docs.map(doc => ({
+            id: doc.id, // FirestoreのドキュメントID
+            ...doc.data()
+        }));
+        res.json(posts);
+    } catch (error) {
+        console.error('投稿一覧の取得エラー:', error);
+        res.status(500).json({ message: '投稿一覧の取得に失敗しました。' });
+    }
+});
+
+// --- 【機能3用】メッセージを編集するエンドポイント ---
+app.patch('/api/edit-message', async (req, res) => {
+    try {
+        const { postId, messageId, channelId, newContent } = req.body;
+        const botToken = process.env.DISCORD_BOT_TOKEN;
+
+        // Discord上のメッセージを更新
+        await axios.patch(`https://discord.com/api/v10/channels/${channelId}/messages/${messageId}`, {
+            content: newContent // 新しいメッセージ内容
+        }, {
+            headers: { 'Authorization': `Bot ${botToken}` }
+        });
+
+        // Firestoreのドキュメントも更新
+        await db.collection('reaction_checks').doc(postId).update({
+            content: newContent
+        });
+
+        res.status(200).json({ success: true, message: 'メッセージを更新しました。' });
+    } catch (error) {
+        console.error('メッセージ編集エラー:', error);
+        res.status(500).json({ message: 'メッセージの編集に失敗しました。' });
+    }
+});
+
+// --- 【機能3用】メッセージを削除するエンドポイント ---
+app.delete('/api/delete-message', async (req, res) => {
+    try {
+        const { postId, messageId, channelId } = req.body;
+        const botToken = process.env.DISCORD_BOT_TOKEN;
+
+        // Discord上のメッセージを削除
+        await axios.delete(`https://discord.com/api/v10/channels/${channelId}/messages/${messageId}`, {
+            headers: { 'Authorization': `Bot ${botToken}` }
+        });
+
+        // Firestoreのドキュメントも削除
+        await db.collection('reaction_checks').doc(postId).delete();
+        
+        res.status(200).json({ success: true, message: 'メッセージを削除しました。' });
+    } catch (error) {
+        console.error('メッセージ削除エラー:', error);
+        res.status(500).json({ message: 'メッセージの削除に失敗しました。' });
     }
 });
 
