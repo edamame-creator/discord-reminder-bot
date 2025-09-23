@@ -214,41 +214,44 @@ app.get('/run-reminder', async (req, res) => {
 app.post('/post-reaction-check', async (req, res) => {
     try {
         const { content, targetUsers, reminderDate, channelId, guildId } = req.body;
-        
-        // Renderの環境変数からボットトークンとチャンネルIDを取得
         const botToken = process.env.DISCORD_BOT_TOKEN;
+
         const isEveryone = targetUsers.includes('everyone');
+        let finalTargetUsers = targetUsers;
         let mentions = '';
 
         if (isEveryone) {
+            // @everyoneが選択された場合、サーバーの全メンバーIDを取得する
+            const response = await axios.get(`https://discord.com/api/v10/guilds/${guildId}/members`, {
+                headers: { 'Authorization': `Bot ${botToken}` },
+                params: { limit: 1000 }
+            });
+            // ボットではない実際のユーザーIDだけをリスト化
+            finalTargetUsers = response.data
+                .filter(member => !member.user.bot)
+                .map(member => member.user.id);
+            
             mentions = '@everyone';
         } else {
             mentions = targetUsers.map(userId => `<@${userId}>`).join(' ');
         }
-      
+        
         const messageToSend = {
-            content: `${mentions}\n\n**【重要なお知らせ】**\n${content}\n\n---\n内容を確認したら、このメッセージに :white_check_mark: のリアクションをお願いします。`
+            content: `${mentions}\n\n**【重要なお知らせ】**\n${content}\n\n---\n内容を確認したら、このメッセージに :white_check_mark: のリアクションをお願いします。`,
+            allowed_mentions: { parse: isEveryone ? ['everyone'] : ['users'] }
         };
 
-        // Discord APIを直接叩いてメッセージを投稿し、レスポンスからメッセージIDを取得
-        const response = await axios.post(`https://discord.com/api/v10/channels/${targetChannelId}/messages`, messageToSend, {
-            headers: {
-                'Authorization': `Bot ${botToken}`,
-                'Content-Type': 'application/json'
-            }
+        const response = await axios.post(`https://discord.com/api/v10/channels/${channelId}/messages`, messageToSend, {
+            headers: { 'Authorization': `Bot ${botToken}`, 'Content-Type': 'application/json' }
         });
-
         const messageId = response.data.id;
 
-        // Firestoreに管理用のデータを保存
+        // Firestoreにリアクションチェックの記録を作成
+        // @everyoneの場合でも、取得した全メンバーのリストを保存する
         await db.collection('reaction_checks').add({
-            messageId: messageId,
-            channelId: targetChannelId,
-         　 content: content,
-            targetUsers: targetUsers, // Discord IDの配列
-            reminderDate: reminderDate,
-          　guildId: guildId, // フロントエンドから受け取ったguildIdを保存
-            isReminderSent: false,
+            messageId, channelId, content, guildId, reminderDate,
+            targetUsers: finalTargetUsers, // ★取得した全メンバーのIDリスト
+            isSent: false,
             createdAt: admin.firestore.FieldValue.serverTimestamp()
         });
 
