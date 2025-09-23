@@ -399,18 +399,31 @@ app.get('/api/discord/channels', async (req, res) => {
 app.get('/api/reaction-checks', async (req, res) => {
     try {
         const { guildId } = req.query;
-        if (!guildId) {
-            return res.status(400).json({ message: 'サーバーIDが必要です。' });
-        }
+        if (!guildId) return res.status(400).json({ message: 'サーバーIDが必要です。' });
 
         const snapshot = await db.collection('reaction_checks')
-                                 .where('guildId', '==', guildId) // guildIdで絞り込み
+                                 .where('guildId', '==', guildId)
                                  .orderBy('createdAt', 'desc')
                                  .get();
-        const posts = snapshot.docs.map(doc => ({
-            id: doc.id, // FirestoreのドキュメントID
-            ...doc.data()
-        }));
+        
+        // Firestoreから全メンバーの情報を一度だけ取得
+        const membersSnapshot = await db.collection('members').get();
+        const membersMap = new Map(membersSnapshot.docs.map(doc => [doc.data().discordId, doc.data().name]));
+
+        const posts = snapshot.docs.map(doc => {
+            const data = doc.data();
+            // targetUsersのIDを名前に変換
+            const targetUserDetails = data.targetUsers.map(discordId => ({
+                id: discordId,
+                name: membersMap.get(discordId) || '不明なユーザー'
+            }));
+
+            return {
+                id: doc.id,
+                ...data,
+                targetUserDetails: targetUserDetails // ★名前の情報も追加
+            };
+        });
         res.json(posts);
     } catch (error) {
         console.error('投稿一覧の取得エラー:', error);
