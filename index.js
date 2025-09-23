@@ -418,21 +418,35 @@ app.patch('/api/edit-message', async (req, res) => {
         const { postId, messageId, channelId, newContent } = req.body;
         const botToken = process.env.DISCORD_BOT_TOKEN;
 
-        // Discord上のメッセージを更新
+        // 1. Firestoreから元の投稿データを取得する
+        const docRef = db.collection('reaction_checks').doc(postId);
+        const doc = await docRef.get();
+        if (!doc.exists) {
+            return res.status(404).json({ message: '元の投稿データが見つかりません。' });
+        }
+        const postData = doc.data();
+        
+        // 2. 元のメンション対象者リストを使って、メンション文字列を再生成する
+        const mentions = postData.targetUsers.map(userId => `<@${userId}>`).join(' ');
+
+        // 3. メンション、新しい本文、定型文を組み合わせて、完全なメッセージを再構築する
+        const fullMessageContent = `${mentions}\n\n**【重要なお知らせ】**\n${newContent}\n\n---\n内容を確認したら、このメッセージに :white_check_mark: のリアクションをお願いします。`;
+
+        // 4. Discord上のメッセージを、再構築した完全な内容で更新する
         await axios.patch(`https://discord.com/api/v10/channels/${channelId}/messages/${messageId}`, {
-            content: newContent // 新しいメッセージ内容
+            content: fullMessageContent
         }, {
             headers: { 'Authorization': `Bot ${botToken}` }
         });
 
-        // Firestoreのドキュメントも更新
-        await db.collection('reaction_checks').doc(postId).update({
+        // 5. Firestoreのドキュメントの「本文(content)」部分だけを更新する
+        await docRef.update({
             content: newContent
         });
 
         res.status(200).json({ success: true, message: 'メッセージを更新しました。' });
     } catch (error) {
-        console.error('メッセージ編集エラー:', error);
+        console.error('メッセージ編集エラー:', error.response ? error.response.data : error.message);
         res.status(500).json({ message: 'メッセージの編集に失敗しました。' });
     }
 });
