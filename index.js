@@ -180,7 +180,8 @@ async function findNonSubmitters(reminder) {
 async function sendDiscordNotification(nonSubmitters, reminder) {
     // 環境変数からBotトークンと投稿先チャンネルIDを取得
     const botToken = process.env.DISCORD_BOT_TOKEN;
-    const channelId = process.env.DISCORD_CHANNEL_ID;
+    // 環境変数からではなく、リマインダー情報からチャンネルIDを取得
+    const channelId = reminder.channelId; 
 
     if (!botToken || !channelId) {
         console.error('ボットトークンまたはチャンネルIDが設定されていません。');
