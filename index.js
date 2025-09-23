@@ -241,6 +241,7 @@ app.post('/post-reaction-check', async (req, res) => {
         await db.collection('reaction_checks').add({
             messageId: messageId,
             channelId: targetChannelId,
+          content: content,
             targetUsers: targetUsers, // Discord IDの配列
             reminderDate: reminderDate,
             isReminderSent: false,
@@ -344,6 +345,33 @@ app.get('/api/discord/members', async (req, res) => {
     } catch (error) {
         console.error('Discordメンバーの取得エラー:', error);
         res.status(500).json({ message: 'メンバーの取得に失敗しました。' });
+    }
+});
+
+// --- Discordサーバーのチャンネル一覧を取得するエンドポイント ---
+app.get('/api/discord/channels', async (req, res) => {
+    try {
+        const guildId = process.env.DISCORD_GUILD_ID;
+        const botToken = process.env.DISCORD_BOT_TOKEN;
+
+        const response = await axios.get(`https://discord.com/api/v10/guilds/${guildId}/channels`, {
+            headers: { 'Authorization': `Bot ${botToken}` }
+        });
+        
+        // テキストチャンネル(type: 0)のみに絞り込み、名前とIDだけのリストを返す
+        const channelList = response.data
+            .filter(channel => channel.type === 0)
+            .map(channel => ({
+                id: channel.id,
+                name: channel.name
+            }))
+            .sort((a, b) => a.name.localeCompare(b.name));
+
+        res.json(channelList);
+
+    } catch (error) {
+        console.error('Discordチャンネルの取得エラー:', error);
+        res.status(500).json({ message: 'チャンネルの取得に失敗しました。' });
     }
 });
 
