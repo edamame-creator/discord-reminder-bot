@@ -322,6 +322,30 @@ app.get('/api/discord/callback', async (req, res) => {
   }
 });
 
+// --- Discordサーバーのメンバー一覧を取得するエンドポイント ---
+app.get('/api/discord/members', async (req, res) => {
+    try {
+        const guildId = process.env.DISCORD_GUILD_ID;
+        const botToken = process.env.DISCORD_BOT_TOKEN;
+
+        const response = await axios.get(`https://discord.com/api/v10/guilds/${guildId}/members`, {
+            headers: { 'Authorization': `Bot ${botToken}` },
+            params: { limit: 1000 } // 最大1000人まで取得
+        });
+
+        // 使いやすいように、名前とIDだけのシンプルなリストに加工して返す
+        const memberList = response.data.map(member => ({
+            id: member.user.id,
+            name: member.nick || member.user.username // ニックネームがあれば優先
+        })).sort((a, b) => a.name.localeCompare(b.name)); // 名前順にソート
+
+        res.json(memberList);
+
+    } catch (error) {
+        console.error('Discordメンバーの取得エラー:', error);
+        res.status(500).json({ message: 'メンバーの取得に失敗しました。' });
+    }
+});
 
 app.listen(3000, () => {
   console.log('リマインダーBOTサーバーがポート3000で起動しました。');
