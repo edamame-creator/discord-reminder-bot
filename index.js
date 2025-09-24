@@ -214,51 +214,49 @@ app.get('/run-reminder', async (req, res) => {
 // --- 既読確認メッセージ投稿用のエンドポイント ---
 app.post('/post-reaction-check', async (req, res) => {
     try {
-        const { content, targetUsers, reminderDate, postChannelId, reminderChannelId, guildId } = req.body;
+        // フロントエンドから selectedRoles も受け取る
+        const { content, targetUsers = [], targetRoles = [], reminderDate, channelId, guildId } = req.body;
         const botToken = process.env.DISCORD_BOT_TOKEN;
 
-        const isEveryone = targetUsers.includes('everyone');
-        let finalTargetUsers = targetUsers;
-        let mentions = '';
+        let finalTargetUsers = new Set(targetUsers); // 重複を避けるためSetを使用
+        let mentions = targetUsers.map(userId => `<@${userId}>`);
 
-        if (isEveryone) {
-            // @everyoneが選択された場合、サーバーの全メンバーIDを取得する
-            const response = await axios.get(`https://discord.com/api/v10/guilds/${guildId}/members`, {
+        // ロールが選択されている場合の処理
+        if (targetRoles.length > 0) {
+            // サーバーの全メンバー情報を取得
+            const membersResponse = await axios.get(`https://discord.com/api/v10/guilds/${guildId}/members`, {
                 headers: { 'Authorization': `Bot ${botToken}` },
                 params: { limit: 1000 }
             });
-            // ボットではない実際のユーザーIDだけをリスト化
-            finalTargetUsers = response.data
-                .filter(member => !member.user.bot)
-                .map(member => member.user.id);
             
-            mentions = '@everyone';
-        } else {
-            mentions = targetUsers.map(userId => `<@${userId}>`).join(' ');
+            // 選択されたロールを持つメンバーを探す
+            membersResponse.data.forEach(member => {
+                const hasRole = member.roles.some(roleId => targetRoles.includes(roleId));
+                if (hasRole && !member.user.bot) {
+                    finalTargetUsers.add(member.user.id);
+                }
+            });
+            
+            // メンション文字列にロールメンションを追加
+            mentions.push(...targetRoles.map(roleId => `<@&${roleId}>`));
         }
-        
+
         const messageToSend = {
-            content: `${mentions}\n\n**【重要なお知らせ】**\n${content}\n\n---\n内容を確認したら、このメッセージに :white_check_mark: のリアクションをお願いします。`,
-            allowed_mentions: { parse: isEveryone ? ['everyone'] : ['users'] }
+            content: `${mentions.join(' ')}\n\n**【重要なお知らせ】**\n${content}\n\n---\n内容を確認したら、このメッセージに :white_check_mark: のリアクションをお願いします。`,
+            allowed_mentions: { parse: ['users', 'roles'] } // ユーザーとロールの両方のメンションを許可
         };
 
-        const response = await axios.post(`https://discord.com/api/v10/channels/${postChannelId}/messages`, messageToSend, {
+        const response = await axios.post(`https://discord.com/api/v10/channels/${channelId}/messages`, messageToSend, {
             headers: { 'Authorization': `Bot ${botToken}`, 'Content-Type': 'application/json' }
         });
         const messageId = response.data.id;
 
-        // Firestoreにリアクションチェックの記録を作成
-        // @everyoneの場合でも、取得した全メンバーのリストを保存する
+        // リアクションチェックの記録を作成
         await db.collection('reaction_checks').add({
-            messageId,
-    　　　　 content,
-            guildId,
-            reminderDate,
-            postChannelId: postChannelId,         
-            reminderChannelId: reminderChannelId,
-            targetUsers: finalTargetUsers,
+            messageId, channelId, content, guildId, reminderDate,
+            targetUsers: Array.from(finalTargetUsers), // Setを配列に戻して保存
             isSent: false,
-            createdAt: admin.firestore.FieldValue.serverTimestamp()  
+            createdAt: admin.firestore.FieldValue.serverTimestamp()
         });
 
         res.status(200).send({ success: true, message: 'メッセージを投稿しました。' });
@@ -552,6 +550,35 @@ app.post('/api/remind-now', async (req, res) => {
     } catch (error) {
         console.error('「今すぐリマインド」エラー:', error);
         res.status(500).json({ message: 'リマインドの送信に失敗しました。'});
+    }
+});
+
+// --- Discordサーバーのロール一覧を取得するエンドポイント ---
+app.get('/api/discord/roles', async (req, res) => {
+    try {
+        const { guildId } = req.query;
+        if (!guildId) return res.status(400).json({ message: 'サーバーIDが必要です。' });
+
+        const botToken = process.env.DISCORD_BOT_TOKEN;
+
+        const response = await axios.get(`https://discord.com/api/v10/guilds/${guildId}/roles`, {
+            headers: { 'Authorization': `Bot ${botToken}` }
+        });
+        
+        // @everyoneロールやBotによって管理されているロールを除外し、整形して返す
+        const roleList = response.data
+            .filter(role => role.name !== '@everyone' && !role.managed)
+            .map(role => ({
+                id: role.id,
+                name: role.name,
+                color: role.color // 色情報も渡してあげるとUIで活用できる
+            }))
+            .sort((a, b) => a.name.localeCompare(b.name));
+
+        res.json(roleList);
+    } catch (error) {
+        console.error('Discordロールの取得エラー:', error);
+        res.status(500).json({ message: 'ロールの取得に失敗しました。' });
     }
 });
 
