@@ -98,7 +98,7 @@ async function checkAndRemind(doc) {
             const reminderMentions = targetUsers.map(userId => `<@${userId}>`).join(' ');
             const originalMessageLink = `https://discord.com/channels/${guildId}/${channelId}/${messageId}`;
             const reminderMessage = { content: `${reminderMentions}\n\n**【確認リマインダー】**\n${originalMessageLink}` };
-            await axios.post(`https://discord.com/api/v10/channels/${channelId}/messages`, reminderMessage, { headers: { 'Authorization': `Bot ${botToken}`, 'Content-Type': 'application/json' } });
+            await axios.post(`https://discord.com/api/v10/channels/${reminderChannelId}/messages`, reminderMessage, { headers: { 'Authorization': `Bot ${botToken}`, 'Content-Type': 'application/json' } });
         } else {
             console.error(`[エラー] ID ${messageId} のチェック中にエラー:`, error.message);
         }
@@ -215,7 +215,7 @@ app.get('/run-reminder', async (req, res) => {
 app.post('/post-reaction-check', async (req, res) => {
     try {
         // フロントエンドから selectedRoles も受け取る
-        const { content, targetUsers = [], targetRoles = [], reminderDate, channelId, guildId } = req.body;
+        const { content, targetUsers = [], targetRoles = [], reminderDate, postChannelId, reminderChannelId, guildId } = req.body;
         const botToken = process.env.DISCORD_BOT_TOKEN;
 
         let finalTargetUsers = new Set(targetUsers); // 重複を避けるためSetを使用
@@ -253,10 +253,15 @@ app.post('/post-reaction-check', async (req, res) => {
 
         // リアクションチェックの記録を作成
         await db.collection('reaction_checks').add({
-            messageId, channelId, content, guildId, reminderDate,
-            targetUsers: Array.from(finalTargetUsers), // Setを配列に戻して保存
-            isSent: false,
-            createdAt: admin.firestore.FieldValue.serverTimestamp()
+                messageId: messageId,
+                content: content,
+                guildId: guildId,
+                reminderDate: reminderDate,
+                postChannelId: postChannelId,
+                reminderChannelId: reminderChannelId,
+                targetUsers: Array.from(finalTargetUsers),
+                isSent: false,
+                createdAt: admin.firestore.FieldValue.serverTimestamp()
         });
 
         res.status(200).send({ success: true, message: 'メッセージを投稿しました。' });
