@@ -59,7 +59,7 @@ async function runReminderCheck() {
 // 特定のドキュメントIDを対象にリアクションチェックとリマインドを行う関数
 async function checkAndRemind(doc) {
     const check = doc.data();
-    const { messageId, channelId, targetUsers, guildId } = check;
+    const { messageId, postChannelId, reminderChannelId, targetUsers, guildId } = check;
     const botToken = process.env.DISCORD_BOT_TOKEN;
   　
 
@@ -83,7 +83,7 @@ async function checkAndRemind(doc) {
             const reminderMessage = {
                 content: `${reminderMentions}\n\n**【確認リマインダー】**\n下記のメッセージをまだ確認していません。内容を確認の上、リアクションをお願いします。\n${originalMessageLink}`
             };
-            await axios.post(`https://discord.com/api/v10/channels/${channelId}/messages`, reminderMessage, {
+            await axios.post(`https://discord.com/api/v10/channels/${reminderChannelId}/messages`, reminderMessage, {
                 headers: { 'Authorization': `Bot ${botToken}`, 'Content-Type': 'application/json' }
             });
             console.log(`[リマインド送信] 未反応者 (${nonReactors.join(', ')}) に送信しました。`);
@@ -213,7 +213,7 @@ app.get('/run-reminder', async (req, res) => {
 // --- 既読確認メッセージ投稿用のエンドポイント ---
 app.post('/post-reaction-check', async (req, res) => {
     try {
-        const { content, targetUsers, reminderDate, channelId, guildId } = req.body;
+        const { content, targetUsers, reminderDate, postChannelId, reminderChannelId, guildId } = req.body;
         const botToken = process.env.DISCORD_BOT_TOKEN;
 
         const isEveryone = targetUsers.includes('everyone');
@@ -241,7 +241,7 @@ app.post('/post-reaction-check', async (req, res) => {
             allowed_mentions: { parse: isEveryone ? ['everyone'] : ['users'] }
         };
 
-        const response = await axios.post(`https://discord.com/api/v10/channels/${channelId}/messages`, messageToSend, {
+        const response = await axios.post(`https://discord.com/api/v10/channels/${postChannelId}/messages`, messageToSend, {
             headers: { 'Authorization': `Bot ${botToken}`, 'Content-Type': 'application/json' }
         });
         const messageId = response.data.id;
@@ -249,10 +249,15 @@ app.post('/post-reaction-check', async (req, res) => {
         // Firestoreにリアクションチェックの記録を作成
         // @everyoneの場合でも、取得した全メンバーのリストを保存する
         await db.collection('reaction_checks').add({
-            messageId, channelId, content, guildId, reminderDate,
-            targetUsers: finalTargetUsers, // ★取得した全メンバーのIDリスト
+            messageId,
+    　　　　 content,
+            guildId,
+            reminderDate,
+            postChannelId: postChannelId,         
+            reminderChannelId: reminderChannelId,
+            targetUsers: finalTargetUsers,
             isSent: false,
-            createdAt: admin.firestore.FieldValue.serverTimestamp()
+            createdAt: admin.firestore.FieldValue.serverTimestamp()  
         });
 
         res.status(200).send({ success: true, message: 'メッセージを投稿しました。' });
