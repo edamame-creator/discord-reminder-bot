@@ -74,6 +74,7 @@ async function checkAndRemind(doc) {
             headers: { 'Authorization': `Bot ${botToken}` },
             params: { limit: 100 }
         });
+      
         const reactedUserIds = response.data.map(user => user.id);
         const nonReactors = targetUsers.filter(targetId => !reactedUserIds.includes(targetId));
 
@@ -348,11 +349,13 @@ app.get('/api/discord/members', async (req, res) => {
             params: { limit: 1000 } // 最大1000人まで取得
         });
 
-        // 使いやすいように、名前とIDだけのシンプルなリストに加工して返す
-        const memberList = response.data.map(member => ({
-            id: member.user.id,
-            name: member.nick || member.user.username // ニックネームがあれば優先
-        })).sort((a, b) => a.name.localeCompare(b.name)); // 名前順にソート
+       // メンバーリストからボットを除外する .filter() を追加
+        const memberList = response.data
+            .filter(member => !member.user.bot) 
+            .map(member => ({
+                id: member.user.id,
+                name: member.nick || member.user.username
+            })).sort((a, b) => a.name.localeCompare(b.name));
 
         res.json(memberList);
 
