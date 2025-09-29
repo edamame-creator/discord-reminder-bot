@@ -626,6 +626,46 @@ app.post('/api/create-team', async (req, res) => {
     }
 });
 
+app.post('/api/join-team', async (req, res) => {
+    const { uid, teamId } = req.body;
+    if (!uid || !teamId) {
+        return res.status(400).json({ success: false, error: '不正なリクエストです。' });
+    }
+
+    try {
+        const db = admin.firestore();
+        const teamRef = db.collection('teams').doc(teamId);
+        const teamDoc = await teamRef.get();
+
+        // 1. チームが存在するか確認
+        if (!teamDoc.exists) {
+            return res.status(404).json({ success: false, error: '指定されたチームが見つかりません。' });
+        }
+
+        // 2. ユーザーの`users`ドキュメントにチームIDを追加
+        const userRef = db.collection('users').doc(uid);
+        await userRef.update({
+            teams: admin.firestore.FieldValue.arrayUnion(teamId)
+        });
+
+        // 3. チームのサブコレクションにメンバーとして追加
+        const userDoc = await userRef.get();
+        const userData = userDoc.data();
+        const memberRef = teamRef.collection('members').doc(uid);
+        await memberRef.set({
+            name: userData.name, photoURL: userData.photoURL,
+            discordId: userData.discordId || null,
+            tasks: [], order: 999 // あとで並び替えられるように大きな値で追加
+        });
+        
+        res.status(200).json({ success: true, teamId: teamId });
+
+    } catch (error) {
+        console.error("チーム参加エラー:", error);
+        res.status(500).json({ success: false, error: 'サーバーでエラーが発生しました。' });
+    }
+});
+
 app.listen(3000, () => {
   console.log('リマインダーBOTサーバーがポート3000で起動しました。');
 });
