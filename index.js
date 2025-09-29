@@ -230,7 +230,7 @@ app.get('/run-reminder', async (req, res) => {
 // --- 既読確認メッセージ投稿用のエンドポイント ---
 app.post('/post-reaction-check', async (req, res) => {
     try {
-        const { content, targetUsers = [], targetRoles = [], reminderDate, postChannelId, reminderChannelId, guildId, teamId } = req.body;
+        const { content, targetUsers = [], targetRoles = [], reminderDate, reactionDeadline, postChannelId, reminderChannelId, guildId, teamId } = req.body;
         if (!teamId) return res.status(400).send({ success: false, message: 'チームIDが必要です。' });
 
         const botToken = process.env.DISCORD_BOT_TOKEN;
@@ -264,9 +264,11 @@ app.post('/post-reaction-check', async (req, res) => {
                 mentions.push(...targetRoles.map(roleId => `<@&${roleId}>`));
             }
         }
-        
+        const deadlineDate = new Date(reactionDeadline);
+        const formattedDeadline = `${deadlineDate.getMonth() + 1}月${deadlineDate.getDate()}日`;
+      
         const messageToSend = {
-            content: `${mentions.join(' ')}\n\n**【重要なお知らせ】**\n${content}\n\n---\n内容を確認したら、このメッセージに :white_check_mark: のリアクションをお願いします。`,
+            content: `${mentions.join(' ')}\n\n**【重要なお知らせ】**\n${content}\n\n---\n**${formattedDeadline}**までに、このメッセージに :white_check_mark: のリアクションをお願いします。`,
             allowed_mentions: { parse: ['users', 'roles', 'everyone'] }
         };
 
@@ -283,6 +285,7 @@ app.post('/post-reaction-check', async (req, res) => {
             content: content,
             guildId: guildId,
             reminderDate: reminderDate,
+            reactionDeadline: reactionDeadline,
             targetUsers: Array.from(finalTargetUsers), // ★展開後の全メンバーIDを保存
             isEveryone: isEveryone, // @everyoneだったかどうかの目印
             isSent: false,
