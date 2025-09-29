@@ -24,36 +24,42 @@ app.use(cors());
 app.use(express.json());
 
 async function runReminderCheck() {
-  console.log('リマインダーチェックを開始します...');
-  const jstDateString = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Tokyo' });
-  const today = jstDateString.split(' ')[0];
+    console.log('リマインダーチェックを開始します...');
+    const today = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Tokyo' }).split(' ')[0];
 
-  const remindersRef = db.collection('reminders');
-  const snapshot = await remindersRef.where('reminderDate', '==', today).where('isSent', '==', false).get();
+    // 全てのチームの"reminders"サブコレクションを横断的に検索
+    const remindersQuery = db.collectionGroup('reminders')
+                               .where('reminderDate', '==', today)
+                               .where('isSent', '==', false);
+    const snapshot = await remindersQuery.get();
 
-  if (snapshot.empty) {
-    console.log('本日実行するリマインダーはありません。');
-    return '本日実行するリマインダーはありませんでした。';
-  }
-
-  for (const doc of snapshot.docs) {
-    const reminder = doc.data();
-    console.log(`リマインダー「${reminder.submissionDeadline}」の処理を開始します。`);
-
-    const nonSubmitters = await findNonSubmitters(reminder, reminder.teamId); 
-
-    if (nonSubmitters.length > 0) {
-      await sendDiscordNotification(nonSubmitters, reminder);
-      console.log('未提出者に通知を送信しました。');
+    if (snapshot.empty) {
+        console.log('本日実行する稼働表リマインダーはありません。');
     } else {
-      console.log('全員提出済みです。');
+        for (const doc of snapshot.docs) {
+            const reminder = doc.data();
+            // ドキュメントの親(teams/{teamId})のIDを取得してteamIdとする
+            const teamId = doc.ref.parent.parent.id;
+            
+            console.log(`チーム[${teamId}]のリマインダー「${reminder.submissionDeadline}」の処理を開始します。`);
+
+            const nonSubmitters = await findNonSubmitters(reminder, teamId);
+
+            if (nonSubmitters.length > 0) {
+                await sendDiscordNotification(nonSubmitters, reminder);
+                console.log('未提出者に通知を送信しました。');
+            } else {
+                console.log('全員提出済みです。');
+            }
+            await doc.ref.update({ isSent: true });
+        }
     }
-    await doc.ref.update({ isSent: true });
-  }
-  // --- 新しいリアクション確認処理を呼び出す ---
+
+    // --- 新しいリアクション確認処理を呼び出す ---
     console.log('リアクションチェックを開始します...');
     await runReactionCheck();
-  return 'リマインダー処理が完了しました。';
+
+    return 'すべてのチェック処理が完了しました。';
 }
 
 // 特定のドキュメントIDを対象にリアクションチェックとリマインドを行う関数
