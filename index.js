@@ -257,11 +257,17 @@ app.post('/post-reaction-check', async (req, res) => {
         });
         const messageId = response.data.id;
 
-        // isEveryoneの場合はリアクションチェックの記録を作成しない
+       // @everyoneではない場合（＝個別メンションかロールメンションの場合）は、
+        // リアクションチェックの記録を作成する
         if (!isEveryone) {
             await db.collection('teams').doc(teamId).collection('reaction_checks').add({
-                messageId, postChannelId, reminderChannelId, content, guildId, reminderDate,
-                targetUsers: Array.from(finalTargetUsers),
+                messageId: messageId,
+                postChannelId: postChannelId,
+                reminderChannelId: reminderChannelId,
+                content: content,
+                guildId: guildId,
+                reminderDate: reminderDate,
+                targetUsers: Array.from(finalTargetUsers), // 展開後の全メンバーIDを保存
                 isSent: false,
                 createdAt: admin.firestore.FieldValue.serverTimestamp()
             });
