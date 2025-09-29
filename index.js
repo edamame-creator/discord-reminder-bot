@@ -308,7 +308,7 @@ app.get('/auth/discord', (req, res) => {
   }
 
   const redirectUri = `${RENDER_APP_URL}/api/discord/callback`;
-  const discordAuthUrl = `https://discord.com/api/oauth2/authorize?client_id=${DISCORD_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=identify&state=${uid}`;
+  const discordAuthUrl = `https://discord.com/api/oauth2/authorize?client_id=${DISCORD_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=identify guilds&state=${uid}`;
   
   res.redirect(discordAuthUrl);
 });
@@ -353,9 +353,12 @@ app.get('/api/discord/callback', async (req, res) => {
     // 3. Firestoreにユーザー情報を保存 (存在しない場合も考慮してset with mergeを使用)
     const userRef = db.collection('users').doc(firebaseUid);
     await userRef.set({
-        discordId: discordUser.id,
-        discordUsername: `${discordUser.username}#${discordUser.discriminator}`
-    }, { merge: true });
+      discordId: discordUser.id,
+      discordUsername: `${discordUser.username}#${discordUser.discriminator}`,
+      discordAccessToken: accessToken,
+      discordRefreshToken: refreshToken,
+      discordTokenExpiresAt: expiresAt
+    }, { merge: true });
 
     // 4. 連携完了後、フロントエンドのプロフィールページなどにリダイレクト
    res.redirect(`https://todolist-e03b2.web.app/signup.html?discord=success`); // 成功時のリダイレクト先URL
@@ -538,50 +541,69 @@ app.delete('/api/delete-message', async (req, res) => {
     }
 });
 
-// --- ユーザーとBotの共通サーバー一覧を取得するエンドポイント ---
+// --- ユーザーとBotの共通サーバー一覧を取得するエンドポイント（新バージョン） ---
 app.get('/api/common-guilds', async (req, res) => {
-    try {
-        const { uid } = req.query;
-        if (!uid) return res.status(400).json({ message: 'UIDが必要です。' });
+    try {
+        const { uid } = req.query;
+        if (!uid) return res.status(400).json({ message: 'UIDが必要です。' });
 
-        const botToken = process.env.DISCORD_BOT_TOKEN;
+        const botToken = process.env.DISCORD_BOT_TOKEN;
+        const userRef = db.collection('users').doc(uid);
+        const userDoc = await userRef.get();
 
-        // 1. Firebase UIDからユーザーのDiscord IDを取得
-        const userDoc = await db.collection('users').doc(uid).get();
-        if (!userDoc.exists || !userDoc.data().discordId) {
-            return res.status(404).json({ message: 'ユーザーに紐づくDiscord IDが見つかりません。' });
-        }
-        const userDiscordId = userDoc.data().discordId;
+        if (!userDoc.exists || !userDoc.data().discordAccessToken) {
+            return res.status(404).json({ message: 'ユーザーのDiscord連携情報が見つかりません。' });
+        }
 
-        // 2. Botが参加しているサーバー一覧を取得
-        const botGuildsResponse = await axios.get('https://discord.com/api/v10/users/@me/guilds', {
-            headers: { 'Authorization': `Bot ${botToken}` }
-        });
-        const botGuilds = botGuildsResponse.data;
+        let { discordAccessToken, discordRefreshToken, discordTokenExpiresAt } = userDoc.data();
 
-        // 3. ユーザーが各サーバーに参加しているか並行してチェック
-        const checkPromises = botGuilds.map(async (guild) => {
-            try {
-                // ユーザーがサーバーのメンバーであるかを確認
-                await axios.get(`https://discord.com/api/v10/guilds/${guild.id}/members/${userDiscordId}`, {
-                    headers: { 'Authorization': `Bot ${botToken}` }
-                });
-                return guild; // メンバーであれば、サーバー情報を返す
-            } catch (error) {
-                // メンバーでない場合(404エラー)、nullを返す
-                return null;
-            }
-        });
-        
-        // 4. チェックが完了したサーバーのうち、nullでないものだけをリスト化
-        const commonGuilds = (await Promise.all(checkPromises)).filter(Boolean);
-        
-        res.json(commonGuilds);
+        // --- トークンの有効期限をチェックし、切れていれば更新する ---
+        if (Date.now() > discordTokenExpiresAt) {
+            console.log(`ユーザー(UID: ${uid})のトークンが期限切れです。更新します...`);
+            const tokenResponse = await axios.post('https://discord.com/api/oauth2/token', new URLSearchParams({
+                client_id: DISCORD_CLIENT_ID,
+                client_secret: DISCORD_CLIENT_SECRET,
+                grant_type: 'refresh_token',
+                refresh_token: discordRefreshToken,
+            }), { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
 
-    } catch (error) {
-        console.error('共通サーバーの取得エラー:', error);
-        res.status(500).json({ message: '共通サーバーの取得に失敗しました。' });
-    }
+            // 新しいトークン情報を変数とDBに保存
+            discordAccessToken = tokenResponse.data.access_token;
+            discordRefreshToken = tokenResponse.data.refresh_token;
+            const expiresIn = tokenResponse.data.expires_in;
+            discordTokenExpiresAt = Date.now() + expiresIn * 1000;
+
+            await userRef.update({
+                discordAccessToken,
+                discordRefreshToken,
+                discordTokenExpiresAt
+            });
+        }
+
+        // 1. Botが参加しているサーバー一覧を取得
+        const botGuildsResponse = await axios.get('https://discord.com/api/v10/users/@me/guilds', {
+            headers: { 'Authorization': `Bot ${botToken}` }
+        });
+        const botGuildIds = new Set(botGuildsResponse.data.map(g => g.id));
+
+        // 2. ユーザーのアクセストークンで、ユーザーが参加しているサーバー一覧を取得
+        const userGuildsResponse = await axios.get('https://discord.com/api/v10/users/@me/guilds', {
+            headers: { 'Authorization': `Bearer ${discordAccessToken}` }
+        });
+
+        // 3. ユーザーが管理者権限を持ち、かつBotも参加しているサーバーのみを抽出
+        const commonGuilds = userGuildsResponse.data.filter(guild => {
+            const permissions = BigInt(guild.permissions);
+            const isAdmin = (permissions & 8n) === 8n; // 8nは管理者フラグ
+            return isAdmin && botGuildIds.has(guild.id);
+        });
+        
+        res.json(commonGuilds);
+
+    } catch (error) {
+        console.error('共通サーバーの取得エラー:', error.response ? error.response.data : error.message);
+        res.status(500).json({ message: '共通サーバーの取得に失敗しました。' });
+    }
 });
 
 app.post('/api/remind-now', async (req, res) => {
