@@ -224,60 +224,64 @@ app.get('/run-reminder', async (req, res) => {
 // --- 既読確認メッセージ投稿用のエンドポイント ---
 app.post('/post-reaction-check', async (req, res) => {
     try {
-         // channelId も受け取り、postChannelId がなければ channelId を使う
-        const { content, targetUsers = [], targetRoles = [], reminderDate, channelId, postChannelId, reminderChannelId, guildId, teamId } = req.body;
+        const { content, targetUsers = [], targetRoles = [], reminderDate, postChannelId, reminderChannelId, guildId, teamId } = req.body;
         if (!teamId) return res.status(400).send({ success: false, message: 'チームIDが必要です。' });
 
         const botToken = process.env.DISCORD_BOT_TOKEN;
-
-        // ★ isEveryoneの定義を先頭に移動
         const isEveryone = targetUsers.includes('everyone');
+        
         let finalTargetUsers = new Set(targetUsers.filter(u => u !== 'everyone'));
         let mentions = targetUsers.filter(u => u !== 'everyone').map(userId => `<@${userId}>`);
 
-        if (isEveryone) {
-            mentions = ['@everyone']; // @everyoneを配列の先頭に追加
-        }
-        
-        if (targetRoles.length > 0) {
+        // @everyone または ロールが選択された場合、サーバーの全メンバー情報を取得
+        if (isEveryone || targetRoles.length > 0) {
             const membersResponse = await axios.get(`https://discord.com/api/v10/guilds/${guildId}/members`, {
                 headers: { 'Authorization': `Bot ${botToken}` },
                 params: { limit: 1000 }
             });
-            membersResponse.data.forEach(member => {
-                const hasRole = member.roles.some(roleId => targetRoles.includes(roleId));
-                if (hasRole && !member.user.bot) {
-                    finalTargetUsers.add(member.user.id);
-                }
-            });
-            mentions.push(...targetRoles.map(roleId => `<@&${roleId}>`));
-        }
+            const allMembers = membersResponse.data;
 
+            if (isEveryone) {
+                mentions = ['@everyone'];
+                allMembers.forEach(member => {
+                    if (!member.user.bot) finalTargetUsers.add(member.user.id);
+                });
+            }
+            
+            if (targetRoles.length > 0) {
+                allMembers.forEach(member => {
+                    const hasRole = member.roles.some(roleId => targetRoles.includes(roleId));
+                    if (hasRole && !member.user.bot) {
+                        finalTargetUsers.add(member.user.id);
+                    }
+                });
+                mentions.push(...targetRoles.map(roleId => `<@&${roleId}>`));
+            }
+        }
+        
         const messageToSend = {
             content: `${mentions.join(' ')}\n\n**【重要なお知らせ】**\n${content}\n\n---\n内容を確認したら、このメッセージに :white_check_mark: のリアクションをお願いします。`,
             allowed_mentions: { parse: ['users', 'roles', 'everyone'] }
         };
-        
+
         const response = await axios.post(`https://discord.com/api/v10/channels/${postChannelId}/messages`, messageToSend, {
             headers: { 'Authorization': `Bot ${botToken}`, 'Content-Type': 'application/json' }
         });
         const messageId = response.data.id;
 
-       // @everyoneではない場合（＝個別メンションかロールメンションの場合）は、
-        // リアクションチェックの記録を作成する
-        if (!isEveryone) {
-            await db.collection('teams').doc(teamId).collection('reaction_checks').add({
-                messageId: messageId,
-                postChannelId: postChannelId,
-                reminderChannelId: reminderChannelId,
-                content: content,
-                guildId: guildId,
-                reminderDate: reminderDate,
-                targetUsers: Array.from(finalTargetUsers), // 展開後の全メンバーIDを保存
-                isSent: false,
-                createdAt: admin.firestore.FieldValue.serverTimestamp()
-            });
-        }
+        // ★★★ 常にFirestoreに記録を作成する ★★★
+        await db.collection('teams').doc(teamId).collection('reaction_checks').add({
+            messageId: messageId,
+            postChannelId: postChannelId,
+            reminderChannelId: reminderChannelId,
+            content: content,
+            guildId: guildId,
+            reminderDate: reminderDate,
+            targetUsers: Array.from(finalTargetUsers), // ★展開後の全メンバーIDを保存
+            isEveryone: isEveryone, // @everyoneだったかどうかの目印
+            isSent: false,
+            createdAt: admin.firestore.FieldValue.serverTimestamp()
+        });
 
         res.status(200).send({ success: true, message: 'メッセージを投稿しました。' });
     } catch (error) {
