@@ -583,6 +583,49 @@ app.get('/api/discord/roles', async (req, res) => {
     }
 });
 
+app.post('/api/create-team', async (req, res) => {
+    // フロントエンドから送られてきたリクエストから、ユーザーIDと新しいチーム名を取得
+    const { uid, teamName } = req.body;
+    if (!uid || !teamName) {
+        return res.status(400).json({ success: false, error: '不正なリクエストです。' });
+    }
+
+    try {
+        // 1. `teams`コレクションに新しいチームドキュメントを作成
+        const teamRef = await db.collection('teams').add({
+            name: teamName,
+            ownerId: uid,
+            createdAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+        const teamId = teamRef.id;
+
+        // 2. ユーザーの`users`ドキュメントにある`teams`配列に、新しいチームIDを追加
+        const userRef = db.collection('users').doc(uid);
+        await userRef.update({
+            teams: admin.firestore.FieldValue.arrayUnion(teamId)
+        });
+        
+        // 3. 新しいチームのサブコレクションに、ユーザーを最初のメンバーとして追加
+        const userDoc = await userRef.get();
+        const userData = userDoc.data();
+        
+        const memberRef = db.collection('teams').doc(teamId).collection('members').doc(uid);
+        await memberRef.set({
+            name: userData.name,
+            photoURL: userData.photoURL,
+            discordId: userData.discordId || null,
+            tasks: [],
+            order: 0
+        });
+
+        res.status(200).json({ success: true, teamId: teamId });
+
+    } catch (error) {
+        console.error("チーム作成エラー:", error);
+        res.status(500).json({ success: false, error: 'サーバーでエラーが発生しました。' });
+    }
+});
+
 app.listen(3000, () => {
   console.log('リマインダーBOTサーバーがポート3000で起動しました。');
 });
