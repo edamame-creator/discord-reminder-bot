@@ -40,7 +40,7 @@ async function runReminderCheck() {
     const reminder = doc.data();
     console.log(`リマインダー「${reminder.submissionDeadline}」の処理を開始します。`);
 
-    const nonSubmitters = await findNonSubmitters(reminder);
+    const nonSubmitters = await findNonSubmitters(reminder, reminder.teamId); 
 
     if (nonSubmitters.length > 0) {
       await sendDiscordNotification(nonSubmitters, reminder);
@@ -61,26 +61,25 @@ async function checkAndRemind(doc) {
     const check = doc.data();
     const { messageId, postChannelId, reminderChannelId, targetUsers, guildId } = check;
     const botToken = process.env.DISCORD_BOT_TOKEN;
-  　
 
-    if (!guildId) {
-        console.error(`ドキュメント ${doc.id} にguildIdがありません。`);
+    if (!guildId || !postChannelId || !reminderChannelId) {
+        console.error(`ドキュメント ${doc.id} に必要なIDが不足しています。`);
         return;
     }
     
     try {
         const emoji = encodeURIComponent('✅');
-        const response = await axios.get(`https://discord.com/api/v10/channels/${channelId}/messages/${messageId}/reactions/${emoji}`, {
+        const response = await axios.get(`https://discord.com/api/v10/channels/${postChannelId}/messages/${messageId}/reactions/${emoji}`, {
             headers: { 'Authorization': `Bot ${botToken}` },
             params: { limit: 100 }
         });
-      
+        
         const reactedUserIds = response.data.map(user => user.id);
         const nonReactors = targetUsers.filter(targetId => !reactedUserIds.includes(targetId));
 
         if (nonReactors.length > 0) {
             const reminderMentions = nonReactors.map(userId => `<@${userId}>`).join(' ');
-            const originalMessageLink = `https://discord.com/channels/${guildId}/${channelId}/${messageId}`;
+            const originalMessageLink = `https://discord.com/channels/${guildId}/${postChannelId}/${messageId}`;
             const reminderMessage = {
                 content: `${reminderMentions}\n\n**【確認リマインダー】**\n下記のメッセージをまだ確認していません。内容を確認の上、リアクションをお願いします。\n${originalMessageLink}`
             };
@@ -93,12 +92,11 @@ async function checkAndRemind(doc) {
         }
     } catch (error) {
         if (error.response && error.response.status === 404) {
-            console.log(`[リマインド送信] メッセージID: ${messageId} に誰もリアクションしていなかったため、全員に送信します。`);
-            // エラー処理内にもリマインド送信ロジックを追加（全員が未反応の場合）
             const reminderMentions = targetUsers.map(userId => `<@${userId}>`).join(' ');
-            const originalMessageLink = `https://discord.com/channels/${guildId}/${channelId}/${messageId}`;
+            const originalMessageLink = `https://discord.com/channels/${guildId}/${postChannelId}/${messageId}`;
             const reminderMessage = { content: `${reminderMentions}\n\n**【確認リマインダー】**\n${originalMessageLink}` };
             await axios.post(`https://discord.com/api/v10/channels/${reminderChannelId}/messages`, reminderMessage, { headers: { 'Authorization': `Bot ${botToken}`, 'Content-Type': 'application/json' } });
+            console.log(`[リマインド送信] メッセージID: ${messageId} に誰もリアクションしていなかったため、全員に送信しました。`);
         } else {
             console.error(`[エラー] ID ${messageId} のチェック中にエラー:`, error.message);
         }
@@ -120,42 +118,44 @@ async function runReactionCheck() {
 }
 
 
-async function findNonSubmitters(reminder) {
-  const membersRef = db.collection('members');
-  const membersSnapshot = await membersRef.get();
-  const allMembers = membersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-  
-  const nonSubmitters = [];
-
-  for (const member of allMembers) {
-    let hasSubmitted = false;
-    const startDate = new Date(reminder.scheduleStartDate);
-    const endDate = new Date(reminder.scheduleEndDate);
-
-    // forループで日付オブジェクトが変更されないようにコピーを作成してループ
-    for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
-      const dateString = d.toLocaleDateString('sv-SE');
-      const scheduleDocRef = db.collection('schedules').doc(dateString);
-      const scheduleDoc = await scheduleDocRef.get();
-
-      if (scheduleDoc.exists) {
-        const data = scheduleDoc.data();
-        const hasAvailability = data.availability?.[member.id]?.length > 0;
-        const isUnavailable = data.unavailable?.[member.id] === true;
-        
-        if (hasAvailability || isUnavailable) {
-          hasSubmitted = true;
-          break;
-        }
-      }
+async function findNonSubmitters(reminder, teamId) {
+    if (!teamId) {
+        console.error('findNonSubmittersに関数にteamIdが渡されませんでした。');
+        return [];
     }
+    const membersRef = db.collection('teams').doc(teamId).collection('members');
+    const schedulesRef = db.collection('teams').doc(teamId).collection('schedules'); // ★正しいパス
     
-    if (!hasSubmitted) {
-      // メンション用にDiscord IDも含むオブジェクトを返す
-      nonSubmitters.push({ name: member.name, discordId: member.discordId });
+    const membersSnapshot = await membersRef.get();
+    const allMembers = membersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    
+    const nonSubmitters = [];
+    for (const member of allMembers) {
+        let hasSubmitted = false;
+        const startDate = new Date(reminder.scheduleStartDate);
+        const endDate = new Date(reminder.scheduleEndDate);
+
+        for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
+            const dateString = d.toLocaleDateString('sv-SE');
+            const scheduleDocRef = schedulesRef.doc(dateString); // ★正しいコレクションを参照
+            const scheduleDoc = await scheduleDocRef.get();
+
+            if (scheduleDoc.exists) {
+                const data = scheduleDoc.data();
+                const hasAvailability = data.availability?.[member.id]?.length > 0;
+                const isUnavailable = data.unavailable?.[member.id] === true;
+                if (hasAvailability || isUnavailable) {
+                    hasSubmitted = true;
+                    break;
+                }
+            }
+        }
+        
+        if (!hasSubmitted) {
+            nonSubmitters.push({ name: member.name, discordId: member.discordId });
+        }
     }
-  }
-  return nonSubmitters;
+    return nonSubmitters;
 }
 
 
@@ -215,7 +215,8 @@ app.get('/run-reminder', async (req, res) => {
 app.post('/post-reaction-check', async (req, res) => {
     try {
         // フロントエンドから selectedRoles も受け取る
-        const { content, targetUsers = [], targetRoles = [], reminderDate, postChannelId, reminderChannelId, guildId } = req.body;
+        const { content, targetUsers = [], targetRoles = [], reminderDate, postChannelId, reminderChannelId, guildId, teamId } = req.body;
+        if (!teamId) return res.status(400).send({ success: false, message: 'チームIDが必要です。' });
         const botToken = process.env.DISCORD_BOT_TOKEN;
 
         let finalTargetUsers = new Set(targetUsers); // 重複を避けるためSetを使用
@@ -400,16 +401,13 @@ app.get('/api/discord/channels', async (req, res) => {
 
 app.get('/api/reaction-checks', async (req, res) => {
     try {
-        const { guildId } = req.query;
+        const { guildId, teamId } = req.query; 
         if (!guildId) return res.status(400).json({ message: 'サーバーIDが必要です。' });
 
-        const snapshot = await db.collection('reaction_checks')
-                                 .where('guildId', '==', guildId)
-                                 .orderBy('createdAt', 'desc')
-                                 .get();
+        const snapshot = await db.collection('teams').doc(teamId).collection('reaction_checks').where('guildId', '==', guildId).orderBy('createdAt', 'desc').get();
         
         // Firestoreから全メンバーの情報を一度だけ取得
-        const membersSnapshot = await db.collection('members').get();
+        const membersSnapshot = await db.collection('teams').doc(teamId).collection('members').get();
         const membersMap = new Map(membersSnapshot.docs.map(doc => [doc.data().discordId, doc.data().name]));
 
         const posts = snapshot.docs.map(doc => {
@@ -436,34 +434,32 @@ app.get('/api/reaction-checks', async (req, res) => {
 // --- 【機能3用】メッセージを編集するエンドポイント ---
 app.patch('/api/edit-message', async (req, res) => {
     try {
-        const { postId, messageId, channelId, newContent } = req.body;
+        const { postId, messageId, channelId, newContent, teamId } = req.body;
+        if (!teamId) return res.status(400).json({ message: 'チームIDが必要です。' });
+        
         const botToken = process.env.DISCORD_BOT_TOKEN;
 
         // 1. Firestoreから元の投稿データを取得する
-        const docRef = db.collection('reaction_checks').doc(postId);
+        const docRef = db.collection('teams').doc(teamId).collection('reaction_checks').doc(postId);
         const doc = await docRef.get();
         if (!doc.exists) {
             return res.status(404).json({ message: '元の投稿データが見つかりません。' });
         }
         const postData = doc.data();
         
-        // 2. 元のメンション対象者リストを使って、メンション文字列を再生成する
+        // 2. メンション文字列を再生成
         const mentions = postData.targetUsers.map(userId => `<@${userId}>`).join(' ');
-
-        // 3. メンション、新しい本文、定型文を組み合わせて、完全なメッセージを再構築する
         const fullMessageContent = `${mentions}\n\n**【重要なお知らせ】**\n${newContent}\n\n---\n内容を確認したら、このメッセージに :white_check_mark: のリアクションをお願いします。`;
 
-        // 4. Discord上のメッセージを、再構築した完全な内容で更新する
+        // 3. Discord上のメッセージを更新
         await axios.patch(`https://discord.com/api/v10/channels/${channelId}/messages/${messageId}`, {
             content: fullMessageContent
         }, {
             headers: { 'Authorization': `Bot ${botToken}` }
         });
 
-        // 5. Firestoreのドキュメントの「本文(content)」部分だけを更新する
-        await docRef.update({
-            content: newContent
-        });
+        // 4. Firestoreの本文(content)を更新
+        await docRef.update({ content: newContent });
 
         res.status(200).json({ success: true, message: 'メッセージを更新しました。' });
     } catch (error) {
@@ -475,7 +471,7 @@ app.patch('/api/edit-message', async (req, res) => {
 // --- 【機能3用】メッセージを削除するエンドポイント ---
 app.delete('/api/delete-message', async (req, res) => {
     try {
-        const { postId, messageId, channelId } = req.body;
+        const { postId, messageId, channelId, teamId } = req.body;
         const botToken = process.env.DISCORD_BOT_TOKEN;
 
         // Discord上のメッセージを削除
@@ -484,7 +480,7 @@ app.delete('/api/delete-message', async (req, res) => {
         });
 
         // Firestoreのドキュメントも削除
-        await db.collection('reaction_checks').doc(postId).delete();
+        await db.collection('teams').doc(teamId).collection('reaction_checks').doc(postId).delete();
         
         res.status(200).json({ success: true, message: 'メッセージを削除しました。' });
     } catch (error) {
@@ -541,10 +537,10 @@ app.get('/api/common-guilds', async (req, res) => {
 
 app.post('/api/remind-now', async (req, res) => {
     try {
-        const { postId } = req.body;
+        const { postId, teamId } = req.body;
         if (!postId) return res.status(400).json({ message: 'postIdが必要です。'});
 
-        const docRef = db.collection('reaction_checks').doc(postId);
+        const docRef = db.collection('teams').doc(teamId).collection('reaction_checks').doc(postId);
         const doc = await docRef.get();
 
         if (!doc.exists) return res.status(404).json({ message: '対象の投稿が見つかりません。'});
