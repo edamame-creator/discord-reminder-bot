@@ -218,7 +218,8 @@ app.get('/run-reminder', async (req, res) => {
 // --- 既読確認メッセージ投稿用のエンドポイント ---
 app.post('/post-reaction-check', async (req, res) => {
     try {
-        const { content, targetUsers = [], targetRoles = [], reminderDate, postChannelId, reminderChannelId, guildId, teamId } = req.body;
+         // channelId も受け取り、postChannelId がなければ channelId を使う
+        const { content, targetUsers = [], targetRoles = [], reminderDate, channelId, postChannelId, reminderChannelId, guildId, teamId } = req.body;
         if (!teamId) return res.status(400).send({ success: false, message: 'チームIDが必要です。' });
 
         const botToken = process.env.DISCORD_BOT_TOKEN;
@@ -585,9 +586,9 @@ app.get('/api/discord/roles', async (req, res) => {
 });
 
 app.post('/api/create-team', async (req, res) => {
-    // フロントエンドから送られてきたリクエストから、ユーザーIDと新しいチーム名を取得
-    const { uid, teamName } = req.body;
-    if (!uid || !teamName) {
+    // フロントエンドから送られてきたリクエストから必要な情報を取得
+    const { uid, teamName, guildId, guildName } = req.body;
+    if (!uid || !teamName || !guildId || !guildName) {
         return res.status(400).json({ success: false, error: '不正なリクエストです。' });
     }
 
@@ -596,8 +597,8 @@ app.post('/api/create-team', async (req, res) => {
         const teamRef = await db.collection('teams').add({
             name: teamName,
             ownerId: uid,
-            guildId: guildId,
-            guildName: guildName,
+            guildId: guildId,         // ★ guildId を正しく保存
+            guildName: guildName,       // ★ guildName を正しく保存
             createdAt: admin.firestore.FieldValue.serverTimestamp()
         });
         const teamId = teamRef.id;
@@ -619,6 +620,14 @@ app.post('/api/create-team', async (req, res) => {
             discordId: userData.discordId || null,
             tasks: [],
             order: 0
+        });
+
+        // diariesサブコレクションにも初期ドキュメントを作成
+        const diaryRef = db.collection('teams').doc(teamId).collection('diaries').doc(uid);
+        await diaryRef.set({
+            name: userData.name,
+            photoURL: userData.photoURL,
+            logs: []
         });
 
         res.status(200).json({ success: true, teamId: teamId });
