@@ -595,6 +595,8 @@ app.post('/api/create-team', async (req, res) => {
         const teamRef = await db.collection('teams').add({
             name: teamName,
             ownerId: uid,
+            guildId: guildId,
+            guildName: guildName,
             createdAt: admin.firestore.FieldValue.serverTimestamp()
         });
         const teamId = teamRef.id;
