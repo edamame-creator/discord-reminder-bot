@@ -361,12 +361,14 @@ app.get('/api/discord/callback', async (req, res) => {
     }, { merge: true });
 
     // 4. 連携完了後、フロントエンドのプロフィールページなどにリダイレクト
-   res.redirect(`https://todolist-e03b2.web.app/signup.html?discord=success`); // 成功時のリダイレクト先URL
+   const frontendUrl = process.env.FRONTEND_URL || 'https://todolist-e03b2.web.app';
+   res.redirect(`${frontendUrl}/signup.html?discord=success`); // 成功時のリダイレクト先URL
 
   } catch (error) {
     console.error('Discord OAuth Error:', error.response ? error.response.data : error.message);
     // 失敗時はエラーページなどにリダイレクト
-    res.redirect(`https://todolist-e03b2.web.app/signup.html?discord=error`);
+    const frontendUrl = process.env.FRONTEND_URL || 'https://todolist-e03b2.web.app';
+    res.redirect(`${frontendUrl}/signup.html?discord=error`);
   }
 });
 
