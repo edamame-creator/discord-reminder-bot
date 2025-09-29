@@ -489,20 +489,27 @@ app.patch('/api/edit-message', async (req, res) => {
 // --- 【機能3用】メッセージを削除するエンドポイント ---
 app.delete('/api/delete-message', async (req, res) => {
     try {
+        // bodyから正しく teamId を受け取る
         const { postId, messageId, channelId, teamId } = req.body;
+        if (!teamId || !postId) {
+            return res.status(400).json({ message: 'チームIDと投稿IDは必須です。' });
+        }
+        
         const botToken = process.env.DISCORD_BOT_TOKEN;
 
         // Discord上のメッセージを削除
-        await axios.delete(`https://discord.com/api/v10/channels/${channelId}/messages/${messageId}`, {
-            headers: { 'Authorization': `Bot ${botToken}` }
-        });
+        if (messageId && channelId) {
+            await axios.delete(`https://discord.com/api/v10/channels/${channelId}/messages/${messageId}`, {
+                headers: { 'Authorization': `Bot ${botToken}` }
+            }).catch(err => console.warn(`Discordメッセージ(ID:${messageId})の削除に失敗した可能性があります。`, err.message));
+        }
 
         // Firestoreのドキュメントも削除
         await db.collection('teams').doc(teamId).collection('reaction_checks').doc(postId).delete();
         
         res.status(200).json({ success: true, message: 'メッセージを削除しました。' });
     } catch (error) {
-        console.error('メッセージ削除エラー:', error);
+        console.error('メッセージ削除エラー:', error.response ? error.response.data : error.message);
         res.status(500).json({ message: 'メッセージの削除に失敗しました。' });
     }
 });
