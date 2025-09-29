@@ -89,41 +89,47 @@ async function checkAndRemind(doc) {
             const reminderMessage = {
                 content: `${reminderMentions}\n\n**【確認リマインダー】**\n下記のメッセージをまだ確認していません。内容を確認の上、リアクションをお願いします。\n${originalMessageLink}`
             };
-            await axios.post(`https://discord.com/api/v10/channels/${reminderChannelId}/messages`, reminderMessage, {
+            
+            // --- ▼▼▼ 修正箇所 ▼▼▼ ---
+            // リマインダーを送信し、そのレスポンスを受け取る
+            const reminderResponse = await axios.post(`https://discord.com/api/v10/channels/${reminderChannelId}/messages`, reminderMessage, {
                 headers: { 'Authorization': `Bot ${botToken}`, 'Content-Type': 'application/json' }
             });
+            const reminderMessageId = reminderResponse.data.id;
+
+            // 送信したリマインダーの情報をFirestoreに記録
+            await doc.ref.update({
+                sentReminders: admin.firestore.FieldValue.arrayUnion({
+                    messageId: reminderMessageId,
+                    channelId: reminderChannelId 
+                })
+            });
+            // --- ▲▲▲ ここまで ▲▲▲
+
             console.log(`[リマインド送信] 未反応者 (${nonReactors.join(', ')}) に送信しました。`);
         } else {
             console.log(`[リマインド不要] メッセージID: ${messageId} は全員反応済みです。`);
         }
     } catch (error) {
         if (error.response && error.response.status === 404) {
+            // (エラー処理内のリマインド送信も同様に修正)
             const reminderMentions = targetUsers.map(userId => `<@${userId}>`).join(' ');
             const originalMessageLink = `https://discord.com/channels/${guildId}/${postChannelId}/${messageId}`;
             const reminderMessage = { content: `${reminderMentions}\n\n**【確認リマインダー】**\n${originalMessageLink}` };
-            await axios.post(`https://discord.com/api/v10/channels/${reminderChannelId}/messages`, reminderMessage, { headers: { 'Authorization': `Bot ${botToken}`, 'Content-Type': 'application/json' } });
+            
+            const reminderResponse = await axios.post(`https://discord.com/api/v10/channels/${reminderChannelId}/messages`, reminderMessage, { headers: { 'Authorization': `Bot ${botToken}`, 'Content-Type': 'application/json' } });
+            const reminderMessageId = reminderResponse.data.id;
+
+            await doc.ref.update({
+                sentReminders: admin.firestore.FieldValue.arrayUnion({
+                    messageId: reminderMessageId,
+                    channelId: reminderChannelId 
+                })
+            });
             console.log(`[リマインド送信] メッセージID: ${messageId} に誰もリアクションしていなかったため、全員に送信しました。`);
         } else {
             console.error(`[エラー] ID ${messageId} のチェック中にエラー:`, error.message);
         }
-    }
-}
-
-// 毎日実行される関数は、上記の関数を呼び出すだけにする
-async function runReactionCheck() {
-    const today = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Tokyo' }).split(' ')[0];
-    // 全てのチームの"reminders"サブコレクションを横断的に検索
-    const remindersQuery = db.collectionGroup('reminders')
-                               .where('reminderDate', '==', today)
-                               .where('isSent', '==', false);
-    const snapshot = await remindersQuery.get();
-    if (snapshot.empty) {
-        console.log('本日チェックするリアクションはありません。');
-        return;
-    }
-    for (const doc of snapshot.docs) {
-        await checkAndRemind(doc); // ★リファクタリングした関数を呼び出し
-        await doc.ref.update({ isSent: true }); // 送信済みフラグを立てる
     }
 }
 
@@ -489,25 +495,40 @@ app.patch('/api/edit-message', async (req, res) => {
 // --- 【機能3用】メッセージを削除するエンドポイント ---
 app.delete('/api/delete-message', async (req, res) => {
     try {
-        // bodyから正しく teamId を受け取る
         const { postId, messageId, channelId, teamId } = req.body;
         if (!teamId || !postId) {
             return res.status(400).json({ message: 'チームIDと投稿IDは必須です。' });
         }
         
         const botToken = process.env.DISCORD_BOT_TOKEN;
-
-        // Discord上のメッセージを削除
-        if (messageId && channelId) {
-            await axios.delete(`https://discord.com/api/v10/channels/${channelId}/messages/${messageId}`, {
-                headers: { 'Authorization': `Bot ${botToken}` }
-            }).catch(err => console.warn(`Discordメッセージ(ID:${messageId})の削除に失敗した可能性があります。`, err.message));
-        }
-
-        // Firestoreのドキュメントも削除
-        await db.collection('teams').doc(teamId).collection('reaction_checks').doc(postId).delete();
+        const docRef = db.collection('teams').doc(teamId).collection('reaction_checks').doc(postId);
+        const doc = await docRef.get();
         
-        res.status(200).json({ success: true, message: 'メッセージを削除しました。' });
+        if (doc.exists) {
+            const postData = doc.data();
+            // --- ▼▼▼ 修正箇所 ▼▼▼ ---
+            // 記録された関連リマインダーを、それぞれのチャンネルIDを使って削除
+            if (postData.sentReminders && postData.sentReminders.length > 0) {
+                console.log(`${postData.sentReminders.length}件の関連リマインダーを削除します...`);
+                const deletePromises = postData.sentReminders.map(reminder =>
+                    axios.delete(`https://discord.com/api/v10/channels/${reminder.channelId}/messages/${reminder.messageId}`, {
+                        headers: { 'Authorization': `Bot ${botToken}` }
+                    }).catch(err => console.warn(`リマインダー(ID: ${reminder.messageId})の削除失敗`)) // 失敗しても処理を続行
+                );
+                await Promise.allSettled(deletePromises);
+            }
+            // --- ▲▲▲ ここまで ▲▲▲
+        }
+        
+        // 元のメッセージをDiscordから削除
+        await axios.delete(`https://discord.com/api/v10/channels/${channelId}/messages/${messageId}`, {
+            headers: { 'Authorization': `Bot ${botToken}` }
+        });
+
+        // Firestoreの管理ドキュメントも削除
+        await docRef.delete();
+        
+        res.status(200).json({ success: true, message: 'メッセージと関連リマインダーを削除しました。' });
     } catch (error) {
         console.error('メッセージ削除エラー:', error.response ? error.response.data : error.message);
         res.status(500).json({ message: 'メッセージの削除に失敗しました。' });
