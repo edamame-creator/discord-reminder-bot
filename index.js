@@ -106,7 +106,11 @@ async function checkAndRemind(doc) {
 // 毎日実行される関数は、上記の関数を呼び出すだけにする
 async function runReactionCheck() {
     const today = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Tokyo' }).split(' ')[0];
-    const snapshot = await db.collection('reaction_checks').where('reminderDate', '==', today).where('isReminderSent', '==', false).get();
+    // 全てのチームの"reminders"サブコレクションを横断的に検索
+    const remindersQuery = db.collectionGroup('reminders')
+                               .where('reminderDate', '==', today)
+                               .where('isSent', '==', false);
+    const snapshot = await remindersQuery.get();
     if (snapshot.empty) {
         console.log('本日チェックするリアクションはありません。');
         return;
@@ -252,8 +256,8 @@ app.post('/post-reaction-check', async (req, res) => {
         });
         const messageId = response.data.id;
 
-        // リアクションチェックの記録を作成
-        await db.collection('reaction_checks').add({
+        // 正しいサブコレクションのパスを指定
+            await db.collection('teams').doc(teamId).collection('reaction_checks').add({
                 messageId: messageId,
                 content: content,
                 guildId: guildId,
