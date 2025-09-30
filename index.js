@@ -364,7 +364,11 @@ app.get('/api/discord/callback', async (req, res) => {
 
     // 3. Firestoreにユーザー情報を保存 (存在しない場合も考慮してset with mergeを使用)
     const userRef = db.collection('users').doc(firebaseUid);
-    await userRef.set({
+    const refreshToken = tokenResponse.data.refresh_token;
+    const expiresIn = tokenResponse.data.expires_in;
+    const expiresAt = Date.now() + expiresIn * 1000;
+
+    await userRef.set({
       discordId: discordUser.id,
       discordUsername: `${discordUser.username}#${discordUser.discriminator}`,
       discordAccessToken: accessToken,
