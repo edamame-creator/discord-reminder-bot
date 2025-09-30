@@ -306,7 +306,7 @@ app.get('/auth/discord', (req, res) => {
         return res.status(400).send('Firebase UID is required.');
     }
 
-    const redirectUri = `${process.env.RENDER_APP_URL}/api/discord/callback`;
+    const redirectUri = `${process.env.FRONTEND_URL}/api/discord/callback`;
 
     const authUrl = new URL('https://discord.com/api/oauth2/authorize');
     authUrl.searchParams.set('client_id', process.env.DISCORD_CLIENT_ID);
