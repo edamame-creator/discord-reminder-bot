@@ -306,18 +306,23 @@ app.get('/auth/discord', (req, res) => {
         return res.status(400).send('Firebase UID is required.');
     }
 
-    const redirectUri = `${RENDER_APP_URL}/api/discord/callback`;
+    const redirectUri = `${process.env.RENDER_APP_URL}/api/discord/callback`;
 
-    // URLSearchParamsを使って、安全にURLを構築する
     const authUrl = new URL('https://discord.com/api/oauth2/authorize');
     authUrl.searchParams.set('client_id', process.env.DISCORD_CLIENT_ID);
     authUrl.searchParams.set('redirect_uri', redirectUri);
     authUrl.searchParams.set('response_type', 'code');
     authUrl.searchParams.set('scope', 'identify guilds offline_access');
     authUrl.searchParams.set('state', uid);
-    authUrl.searchParams.set('prompt', 'consent'); // 再認証を促すオプションを再度有効化
+    authUrl.searchParams.set('prompt', 'consent');
 
-    res.redirect(authUrl.toString());
+    const discordAuthUrl = authUrl.toString();
+
+    // --- ▼▼▼ この行を追加してください ▼▼▼ ---
+    console.log('--- [デバッグ] 生成されたDiscord認証URL:', discordAuthUrl); 
+    // --- ▲▲▲ この行を追加してください ▲▲▲ ---
+
+    res.redirect(discordAuthUrl);
 });
 
 
