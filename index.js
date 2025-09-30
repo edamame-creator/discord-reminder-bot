@@ -301,16 +301,23 @@ app.post('/post-reaction-check', async (req, res) => {
 
 // --- ステップ 2-3-A: 認証開始用のエンドポイント ---
 app.get('/auth/discord', (req, res) => {
-  const { uid } = req.query; // フロントエンドからFirebaseのUIDを受け取る
+    const { uid } = req.query;
+    if (!uid) {
+        return res.status(400).send('Firebase UID is required.');
+    }
 
-  if (!uid) {
-    return res.status(400).send('Firebase UID is required.');
-  }
+    const redirectUri = `${RENDER_APP_URL}/api/discord/callback`;
 
-  const redirectUri = `${RENDER_APP_URL}/api/discord/callback`;
-  const discordAuthUrl = `https://discord.com/api/oauth2/authorize?client_id=${DISCORD_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=identify guilds offline_access&state=${uid}`;
-  
-  res.redirect(discordAuthUrl);
+    // URLSearchParamsを使って、安全にURLを構築する
+    const authUrl = new URL('https://discord.com/api/oauth2/authorize');
+    authUrl.searchParams.set('client_id', process.env.DISCORD_CLIENT_ID);
+    authUrl.searchParams.set('redirect_uri', redirectUri);
+    authUrl.searchParams.set('response_type', 'code');
+    authUrl.searchParams.set('scope', 'identify guilds offline_access');
+    authUrl.searchParams.set('state', uid);
+    authUrl.searchParams.set('prompt', 'consent'); // 再認証を促すオプションを再度有効化
+
+    res.redirect(authUrl.toString());
 });
 
 
