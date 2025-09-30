@@ -308,7 +308,7 @@ app.get('/auth/discord', (req, res) => {
   }
 
   const redirectUri = `${RENDER_APP_URL}/api/discord/callback`;
-  const discordAuthUrl = `https://discord.com/api/oauth2/authorize?client_id=${DISCORD_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=identify guilds offline_access&prompt=consent&state=${uid}`;
+  const discordAuthUrl = `https://discord.com/api/oauth2/authorize?client_id=${DISCORD_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=identify guilds offline_access&state=${uid}`;
   
   res.redirect(discordAuthUrl);
 });
