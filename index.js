@@ -765,6 +765,70 @@ app.post('/api/join-team', async (req, res) => {
     }
 });
 
+// --- チームから脱退するエンドポイント ---
+app.post('/api/leave-team', async (req, res) => {
+    const { uid, teamId } = req.body;
+    if (!uid || !teamId) {
+        return res.status(400).json({ success: false, error: '不正なリクエストです。' });
+    }
+
+    try {
+        const userRef = db.collection('users').doc(uid);
+        const memberRef = db.collection('teams').doc(teamId).collection('members').doc(uid);
+
+        // バッチ処理で原子性を保証
+        const batch = db.batch();
+        batch.update(userRef, {
+            teams: admin.firestore.FieldValue.arrayRemove(teamId)
+        });
+        batch.delete(memberRef);
+
+        await batch.commit();
+
+        res.status(200).json({ success: true, message: 'チームから脱退しました。' });
+    } catch (error) {
+        console.error("チーム脱退エラー:", error);
+        res.status(500).json({ success: false, error: 'サーバーでエラーが発生しました。' });
+    }
+});
+
+// --- ユーザーが所属するチーム一覧を取得するエンドポイント ---
+app.get('/api/user-teams', async (req, res) => {
+    const { uid } = req.query;
+    if (!uid) {
+        return res.status(400).json({ error: 'UIDが必要です。' });
+    }
+
+    try {
+        const userRef = db.collection('users').doc(uid);
+        const userDoc = await userRef.get();
+
+        if (!userDoc.exists) {
+            return res.status(404).json({ error: 'ユーザーが見つかりません。' });
+        }
+
+        const teamIds = userDoc.data().teams || [];
+        if (teamIds.length === 0) {
+            return res.json([]);
+        }
+
+        const teamPromises = teamIds.map(id => db.collection('teams').doc(id).get());
+        const teamDocs = await Promise.all(teamPromises);
+
+        const teams = teamDocs.map(doc => {
+            if (doc.exists) {
+                return { id: doc.id, name: doc.data().name };
+            }
+            return null;
+        }).filter(Boolean); // 存在しないチームは除外
+
+        res.status(200).json(teams);
+    } catch (error) {
+        console.error("所属チーム一覧の取得エラー:", error);
+        res.status(500).json({ error: 'サーバーでエラーが発生しました。' });
+    }
+});
+
 app.listen(3000, () => {
   console.log('リマインダーBOTサーバーがポート3000で起動しました。');
 });
